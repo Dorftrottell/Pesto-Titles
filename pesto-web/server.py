@@ -253,17 +253,43 @@ async def api_transcribe(payload: TranscribePayload, bg: BackgroundTasks):
 # ── Preview ────────────────────────────────────────────────────────
 class PreviewPayload(BaseModel):
     clipName: str
-    text: str = "Beispieltext"
     binName: str = "Pesto Captions"
 
 @app.post("/api/preview")
 async def api_preview(payload: PreviewPayload):
+    """
+    Return the Media Pool thumbnail for the given clip via GetThumbnailImage().
+    No timeline manipulation — reads what Resolve already rendered in the Media Pool.
+    """
     try:
-        b64 = rb.render_preview(
-            clip_name=payload.clipName,
-            preview_text=payload.text,
-            bin_name=payload.binName,
-        )
+        resolve = rb.get_resolve()
+        if not resolve:
+            return JSONResponse({"ok": False, "error": "Resolve nicht verbunden."}, status_code=400)
+        project = resolve.GetProjectManager().GetCurrentProject()
+        if not project:
+            return JSONResponse({"ok": False, "error": "Kein Projekt geöffnet."}, status_code=400)
+
+        def find_clip(folder, name):
+            for c in (folder.GetClipList() or []):
+                if c.GetName() == name:
+                    return c
+            for sub in (folder.GetSubFolderList() or []):
+                r = find_clip(sub, name)
+                if r:
+                    return r
+            return None
+
+        clip = find_clip(project.GetMediaPool().GetRootFolder(), payload.clipName)
+        if not clip:
+            return JSONResponse({"ok": False,
+                                 "error": f"Clip '{payload.clipName}' nicht gefunden."}, status_code=404)
+
+        b64 = rb._get_media_pool_thumbnail(clip)
+        if not b64:
+            return JSONResponse({"ok": False,
+                                 "error": "GetThumbnailImage() nicht verfügbar. "
+                                          "Stelle sicher dass Resolve 18+ läuft und der Clip "
+                                          "mindestens einmal im Media Pool geöffnet war."}, status_code=400)
         return {"ok": True, "imageB64": b64}
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
