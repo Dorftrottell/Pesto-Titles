@@ -234,8 +234,14 @@ def scan_templates(bin_name: str = "Pesto Captions") -> list:
     templates = []
     for clip in (folder.GetClipList() or []):
         name = clip.GetName()
-        # Try to grab a real thumbnail via GrabStill; fall back to SVG placeholder
-        thumb = _grab_template_thumbnail(clip, project) or _make_placeholder_thumbnail(name)
+        # 1st try: GetThumbnailImage() — fast, already has alpha (Resolve 18+)
+        # 2nd try: GrabStill on active timeline — slower but universal
+        # 3rd try: SVG placeholder
+        thumb = (
+            _get_media_pool_thumbnail(clip)
+            or _grab_template_thumbnail(clip, project)
+            or _make_placeholder_thumbnail(name)
+        )
         templates.append({
             "clipName": name,
             "thumbnail": thumb,
@@ -245,6 +251,83 @@ def scan_templates(bin_name: str = "Pesto Captions") -> list:
         })
 
     return templates
+
+
+def _get_media_pool_thumbnail(clip) -> Optional[str]:
+    """
+    Use Resolve 18+'s GetThumbnailImage() to grab the clip's built-in
+    Media Pool thumbnail — the exact same image shown in the UI.
+    Returns a white-background base64 PNG, or None on failure.
+    """
+    try:
+        result = clip.GetThumbnailImage()
+        if not result:
+            return None
+
+        # result can be:
+        #   - dict  {"format": "BGRA", "width": W, "height": H, "data": bytes/bytearray}
+        #   - bytes (raw BGRA or RGBA pixel data)
+        #   - str   (base64-encoded PNG/image)
+
+        if isinstance(result, str):
+            # Already base64-encoded — composite on white and return
+            raw_bytes = base64.b64decode(result)
+            return _composite_on_white(raw_bytes)
+
+        if isinstance(result, (bytes, bytearray)):
+            return _composite_on_white(bytes(result))
+
+        if isinstance(result, dict):
+            data   = result.get("data") or result.get("image")
+            width  = result.get("width",  320)
+            height = result.get("height", 180)
+            fmt    = (result.get("format") or "BGRA").upper()
+
+            if not data:
+                return None
+
+            raw = bytes(data)
+
+            # Convert raw pixel buffer → PIL → PNG
+            try:
+                from PIL import Image
+                import io
+                channels = 4 if "A" in fmt else 3
+                mode = "BGRA" if fmt == "BGRA" else ("RGBA" if "A" in fmt else "RGB")
+                img = Image.frombytes(mode if mode in ("RGBA", "RGB") else "RGBA",
+                                      (width, height), raw)
+                if fmt == "BGRA":
+                    r, g, b, a = img.split()
+                    img = Image.merge("RGBA", (b, g, r, a))
+
+                # Composite on white
+                bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+                bg.paste(img, mask=img.split()[3])
+                out = io.BytesIO()
+                bg.convert("RGB").save(out, "PNG")
+                return base64.b64encode(out.getvalue()).decode()
+            except Exception:
+                return None
+
+        return None
+    except Exception:
+        return None
+
+
+def _composite_on_white(raw_bytes: bytes) -> Optional[str]:
+    """Composite raw PNG bytes onto a white background; return base64."""
+    try:
+        from PIL import Image
+        import io
+        img = Image.open(io.BytesIO(raw_bytes)).convert("RGBA")
+        bg  = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        bg.paste(img, mask=img.split()[3])
+        out = io.BytesIO()
+        bg.convert("RGB").save(out, "PNG")
+        return base64.b64encode(out.getvalue()).decode()
+    except Exception:
+        return None
+
 
 
 def _grab_template_thumbnail(clip, project) -> Optional[str]:
@@ -463,11 +546,22 @@ def render_preview(clip_name: str, preview_text: str = "Beispieltext",
     except Exception:
         pass  # Even without text injection, grab what Resolve shows
 
+    # ── Mute tracks below V20 (clean background) ─────────────────────
+    track_count = timeline.GetTrackCount("video")
+    disabled_tracks = []
+    for t in range(1, min(thumb_track, track_count + 1)):
+        try:
+            if timeline.GetIsTrackEnabled("video", t):
+                timeline.SetTrackEnable("video", t, False)
+                disabled_tracks.append(t)
+        except Exception:
+            pass  # API might not support this in older Resolve versions
+
     # ── Move playhead to frame 15 ────────────────────────────────────
     mid_tc = _frames_to_tc(15, int(frame_rate))
     if hasattr(timeline, "SetCurrentTimecode"):
         timeline.SetCurrentTimecode(mid_tc)
-    time.sleep(0.3)
+    time.sleep(0.35)
 
     # ── GrabStill ────────────────────────────────────────────────────
     still = timeline.GrabStill()
@@ -485,9 +579,17 @@ def render_preview(clip_name: str, preview_text: str = "Beispieltext",
             time.sleep(0.6)
             pngs = sorted(pathlib.Path(tmp).glob("*.png"))
             if pngs:
-                thumb_b64 = base64.b64encode(pngs[0].read_bytes()).decode()
+                processed = _postprocess_still_png(pngs[0])
+                thumb_b64 = base64.b64encode(processed).decode()
         try:
             album.DeleteStills([still])
+        except Exception:
+            pass
+
+    # ── Re-enable muted tracks ────────────────────────────────────────
+    for t in disabled_tracks:
+        try:
+            timeline.SetTrackEnable("video", t, True)
         except Exception:
             pass
 
@@ -497,6 +599,29 @@ def render_preview(clip_name: str, preview_text: str = "Beispieltext",
     if not thumb_b64:
         raise RuntimeError("Still konnte nicht exportiert werden.")
     return thumb_b64
+
+
+def _postprocess_still_png(png_path) -> bytes:
+    """
+    Composite the still onto a white background using Pillow.
+    GrabStill composites onto black when no tracks are below.
+    This makes the caption appear on white instead of black.
+    Falls back to raw bytes if Pillow is unavailable.
+    """
+    try:
+        from PIL import Image
+        import io
+        img = Image.open(png_path).convert("RGBA")
+        # White background
+        bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        bg.paste(img, mask=img.split()[3])
+        result = bg.convert("RGB")
+        buf = io.BytesIO()
+        result.save(buf, format="PNG", optimize=True)
+        return buf.getvalue()
+    except Exception:
+        # Pillow not available or error: return raw file bytes
+        return pathlib.Path(png_path).read_bytes()
 
 
 # ── Native transcription ───────────────────────────────────────────
