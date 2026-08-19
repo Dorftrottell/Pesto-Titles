@@ -488,7 +488,6 @@ function renderGallery() {
   const empty   = $('gallery-empty');
   gallery.innerHTML = '';
 
-  // Saved styles first (with ⭐ badge)
   const savedNames = new Set(state.savedStyles.map(s => s.clipName));
 
   const allCards = [
@@ -509,11 +508,12 @@ function renderGallery() {
   empty.style.display   = 'none';
 
   allCards.forEach(entry => {
-    const card = el('div', `template-card${entry._source === 'saved' ? ' saved' : ''}`);
+    const isSaved = entry._source === 'saved';
+    const card    = el('div', `template-card${isSaved ? ' saved' : ''}`);
 
-    // Thumbnail
+    // ── Thumbnail ──────────────────────────────────────────────────
     const thumb = el('div', 'template-card__thumb');
-    const src = makeThumbnailSrc(entry.thumbnail || '');
+    const src   = makeThumbnailSrc(entry.thumbnail || '');
     if (src) {
       const img = el('img');
       img.src = src;
@@ -524,26 +524,60 @@ function renderGallery() {
     }
     card.appendChild(thumb);
 
-    // Badge
-    const badge = el('div', `template-card__badge${entry._source === 'saved' ? ' saved' : ''}`);
-    badge.textContent = entry._source === 'saved' ? '⭐ Gespeichert' : '📁 Bin';
+    // ── Badge ──────────────────────────────────────────────────────
+    const badge = el('div', `template-card__badge${isSaved ? ' saved' : ''}`);
+    badge.textContent = isSaved ? '⭐ Gespeichert' : '📁 Bin';
     card.appendChild(badge);
 
-    // Name
-    const name = el('div', 'template-card__name', escHtml(entry.name || entry.clipName || ''));
-    card.appendChild(name);
+    // ── Name (editable via rename) ─────────────────────────────────
+    const nameEl = el('div', 'template-card__name');
+    nameEl.textContent = entry.name || entry.clipName || '';
+    card.appendChild(nameEl);
 
-    // Delete button (saved only)
-    if (entry._source === 'saved') {
-      const del = el('button', 'template-card__del', '✕ Löschen');
-      del.addEventListener('click', (e) => {
+    // ── Hover action overlay ───────────────────────────────────────
+    const actions = el('div', 'card-actions');
+
+    if (isSaved) {
+      // Saved: rename (✏️) + delete (🗑️)
+      const renBtn = el('button', 'card-action-btn', '✏️');
+      renBtn.title = 'Umbenennen';
+      renBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        startInlineRename(card, nameEl, entry);
+      });
+
+      const delBtn = el('button', 'card-action-btn del', '🗑️');
+      delBtn.title = 'Löschen';
+      delBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         deleteStyle(entry);
       });
-      card.appendChild(del);
+
+      actions.appendChild(renBtn);
+      actions.appendChild(delBtn);
+    } else {
+      // Bin template: save instantly (💾) + rename then save (✏️)
+      const saveBtn = el('button', 'card-action-btn save', '💾');
+      saveBtn.title = 'Mit Clip-Name speichern';
+      saveBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        quickSaveStyle(entry, entry.clipName || entry.name || '', saveBtn);
+      });
+
+      const renBtn = el('button', 'card-action-btn', '✏️');
+      renBtn.title = 'Umbenennen & Speichern';
+      renBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        startInlineRename(card, nameEl, entry);
+      });
+
+      actions.appendChild(saveBtn);
+      actions.appendChild(renBtn);
     }
 
-    // Select on click
+    card.appendChild(actions);
+
+    // ── Select on click ────────────────────────────────────────────
     card.addEventListener('click', () => selectCard(entry, card));
     gallery.appendChild(card);
   });
@@ -558,36 +592,90 @@ function renderGallery() {
   $('gallery-status').textContent = status;
 }
 
+async function quickSaveStyle(entry, name, btnEl) {
+  if (btnEl) { btnEl.disabled = true; btnEl.textContent = '⏳'; }
+  const data = await api('POST', '/api/styles', {
+    name: name.trim() || entry.clipName,
+    clipName:     entry.clipName || entry.name || '',
+    binName:      state.config.binName || 'Pesto Captions',
+    thumbnailB64: entry.thumbnail || '',
+  });
+  if (btnEl) { btnEl.disabled = false; btnEl.textContent = data.ok ? '✓' : '💾'; }
+  if (data.ok) {
+    await loadStyles();
+    renderGallery();
+    // Update detail panel sub-label if this card is selected
+    if (state.selectedCard?.entry?.clipName === entry.clipName) {
+      $('detail-sub').textContent = `⭐ Gespeichert · ${state.config.binName || 'Pesto Captions'}`;
+    }
+  }
+}
+
+function startInlineRename(card, nameEl, entry) {
+  if (card.querySelector('.card-rename-input')) return; // already open
+  const original = entry.name || entry.clipName || '';
+  const inp = el('input', 'card-rename-input');
+  inp.type  = 'text';
+  inp.value = original;
+  nameEl.innerHTML = '';
+  nameEl.appendChild(inp);
+  inp.focus();
+  inp.select();
+
+  const commit = () => {
+    const newName = inp.value.trim() || original;
+    nameEl.textContent = newName;
+    if (entry._source === 'saved') {
+      // Rename = delete old + re-save with new name
+      const styleId = (entry.path || '').split('/').pop().replace(/\.json$/, '');
+      api('DELETE', `/api/styles/${styleId}`).then(() =>
+        quickSaveStyle({ ...entry, name: newName }, newName, null)
+      );
+    } else {
+      quickSaveStyle(entry, newName, null);
+    }
+  };
+
+  inp.addEventListener('blur', commit);
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter')  { e.preventDefault(); inp.blur(); }
+    if (e.key === 'Escape') { nameEl.textContent = original; }
+  });
+}
+
 function selectCard(entry, cardEl) {
-  // Deselect previous
   document.querySelectorAll('.template-card').forEach(c => c.classList.remove('selected'));
   cardEl.classList.add('selected');
   state.selectedCard = { entry, el: cardEl };
 
-  // Show detail panel
-  const panel = $('detail-panel');
-  panel.classList.add('visible');
-
-  // Reset preview
-  $('preview-img').style.display    = 'none';
-  $('preview-placeholder').style.display = '';
+  // Auto-show thumbnail immediately — no button press needed
+  const src = makeThumbnailSrc(entry.thumbnail || '');
   $('preview-error').classList.add('hidden');
   $('preview-spinner').classList.add('hidden');
+  if (src) {
+    $('preview-img').src           = src;
+    $('preview-img').style.display = '';
+    $('preview-placeholder').style.display = 'none';
+  } else {
+    $('preview-img').style.display         = 'none';
+    $('preview-placeholder').style.display = '';
+  }
+
+  // Show detail panel
+  $('detail-panel').classList.add('visible');
 
   $('detail-name').textContent = entry.name || entry.clipName || '';
   $('detail-sub').textContent  =
     `${entry._source === 'saved' ? '⭐ Gespeichert' : '📁 Bin'} · ${state.config.binName || 'Pesto Captions'}`;
-
-  const src = makeThumbnailSrc(entry.thumbnail || '');
-  $('detail-img').src = src || '';
-  $('detail-img').style.display = src ? '' : 'none';
-
-  $('detail-save-input').value = entry.name || entry.clipName || '';
+  $('detail-save-input').value    = entry.name || entry.clipName || '';
   $('detail-save-status').textContent = '';
-  $('detail-save-status').className = 'save-status';
+  $('detail-save-status').className   = 'save-status';
 
   updateApplySummary();
 }
+
+
+
 
 async function saveStyle() {
   const entry = state.selectedCard?.entry;
