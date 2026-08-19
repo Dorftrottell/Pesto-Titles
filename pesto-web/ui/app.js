@@ -568,6 +568,12 @@ function selectCard(entry, cardEl) {
   const panel = $('detail-panel');
   panel.classList.add('visible');
 
+  // Reset preview
+  $('preview-img').style.display    = 'none';
+  $('preview-placeholder').style.display = '';
+  $('preview-error').classList.add('hidden');
+  $('preview-spinner').classList.add('hidden');
+
   $('detail-name').textContent = entry.name || entry.clipName || '';
   $('detail-sub').textContent  =
     `${entry._source === 'saved' ? '⭐ Gespeichert' : '📁 Bin'} · ${state.config.binName || 'Pesto Captions'}`;
@@ -605,10 +611,52 @@ async function saveStyle() {
     renderGallery();
   } else {
     $('detail-save-status').textContent = data.error || 'Fehler.';
-    $('detail-save-status').className = 'save-status';
     $('detail-save-status').style.color = 'var(--error)';
   }
 }
+
+async function generatePreview() {
+  const entry = state.selectedCard?.entry;
+  if (!entry) return;
+
+  const text    = $('preview-text-input').value.trim() || 'Beispieltext';
+  const clipName = entry.clipName || entry.name || '';
+  const btn     = $('preview-btn');
+
+  // Show spinner
+  $('preview-placeholder').style.display = 'none';
+  $('preview-img').style.display         = 'none';
+  $('preview-error').classList.add('hidden');
+  $('preview-spinner').classList.remove('hidden');
+  btn.disabled = true;
+
+  try {
+    const data = await api('POST', '/api/preview', {
+      clipName,
+      text,
+      binName: state.config.binName || 'Pesto Captions',
+    });
+
+    $('preview-spinner').classList.add('hidden');
+
+    if (data.ok && data.imageB64) {
+      const src = `data:image/png;base64,${data.imageB64}`;
+      $('preview-img').src     = src;
+      $('preview-img').style.display = '';
+    } else {
+      $('preview-error-msg').textContent = data.error || 'Vorschau fehlgeschlagen.';
+      $('preview-error').classList.remove('hidden');
+    }
+  } catch(e) {
+    $('preview-spinner').classList.add('hidden');
+    $('preview-error-msg').textContent = 'Server nicht erreichbar.';
+    $('preview-error').classList.remove('hidden');
+  }
+
+  btn.disabled = false;
+}
+
+
 
 async function deleteStyle(entry) {
   if (!confirm(`Stil '${entry.name}' wirklich löschen?`)) return;
@@ -715,6 +763,10 @@ async function init() {
   $('transcribe-btn').addEventListener('click', startTranscription);
   $('refresh-templates-btn').addEventListener('click', refreshTemplates);
   $('detail-save-btn').addEventListener('click', saveStyle);
+  $('preview-btn').addEventListener('click', generatePreview);
+  $('preview-text-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') generatePreview();
+  });
   $('apply-btn').addEventListener('click', applyToTimeline);
   $('save-settings-btn').addEventListener('click', saveSettings);
   $('reseg-btn').addEventListener('click', () => {

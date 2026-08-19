@@ -250,7 +250,25 @@ async def api_transcribe(payload: TranscribePayload, bg: BackgroundTasks):
     bg.add_task(_run_transcription, payload.engine, payload.language, payload.modelSize)
     return {"ok": True}
 
-# ── Apply ──────────────────────────────────────────────────────────
+# ── Preview ────────────────────────────────────────────────────────
+class PreviewPayload(BaseModel):
+    clipName: str
+    text: str = "Beispieltext"
+    binName: str = "Pesto Captions"
+
+@app.post("/api/preview")
+async def api_preview(payload: PreviewPayload):
+    try:
+        b64 = rb.render_preview(
+            clip_name=payload.clipName,
+            preview_text=payload.text,
+            bin_name=payload.binName,
+        )
+        return {"ok": True, "imageB64": b64}
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
 class ApplyPayload(BaseModel):
     cues: List[dict]
     templateClipName: str

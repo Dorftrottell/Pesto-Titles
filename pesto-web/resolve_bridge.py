@@ -375,6 +375,130 @@ def _make_placeholder_thumbnail(name: str) -> str:
     return base64.b64encode(svg.encode()).decode()
 
 
+# ── Live Preview ───────────────────────────────────────────────────
+
+def render_preview(clip_name: str, preview_text: str = "Beispieltext",
+                   bin_name: str = "Pesto Captions") -> str:
+    """
+    Render a preview still of a template clip with custom text.
+
+    1. Finds the template clip in the bin.
+    2. Places it for 1 second on video track V20 at frame 0.
+    3. Sets the PestoText Fusion node to `preview_text`.
+    4. Grabs a still at frame 15 → exports as PNG.
+    5. Cleans up (removes clip from V20, deletes still from gallery).
+    6. Returns base64-encoded PNG (or raises on failure).
+    """
+    import tempfile, time, pathlib
+
+    resolve = get_resolve()
+    if not resolve:
+        raise RuntimeError("Resolve nicht verbunden.")
+
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        raise RuntimeError("Kein Projekt geöffnet.")
+
+    timeline = project.GetCurrentTimeline()
+    if not timeline:
+        raise RuntimeError("Keine aktive Timeline.")
+
+    media_pool = project.GetMediaPool()
+    frame_rate  = float(timeline.GetSetting("timelineFrameRate") or 25)
+    duration    = int(frame_rate)   # 1 second
+    thumb_track = 20
+
+    # ── Find template clip ──────────────────────────────────────────
+    def find_clip(folder, name):
+        for c in (folder.GetClipList() or []):
+            if c.GetName() == name:
+                return c
+        for sub in (folder.GetSubFolderList() or []):
+            r = find_clip(sub, name)
+            if r:
+                return r
+        return None
+
+    clip = find_clip(media_pool.GetRootFolder(), clip_name)
+    if not clip:
+        raise RuntimeError(f"Template '{clip_name}' nicht im Media Pool gefunden.")
+
+    # ── Ensure V20 exists ────────────────────────────────────────────
+    while timeline.GetTrackCount("video") < thumb_track:
+        timeline.AddTrack("video")
+
+    # ── Remove any leftover clip at frame 0 on V20 ───────────────────
+    _remove_clip_at(timeline, thumb_track, 0)
+
+    # ── Place template clip at frame 0 on V20 ───────────────────────
+    clip_info = {
+        "mediaPoolItem": clip,
+        "startFrame": 0,
+        "endFrame": duration - 1,
+        "trackIndex": thumb_track,
+        "recordFrame": 0,
+    }
+    added = media_pool.AppendToTimeline([clip_info])
+    if not added:
+        raise RuntimeError("Clip konnte nicht auf die Timeline gelegt werden.")
+
+    # ── Set preview text in PestoText node ──────────────────────────
+    try:
+        items = timeline.GetItemListInTrack("video", thumb_track) or []
+        placed = next((i for i in items if abs(i.GetStart()) < 5), None)
+        if placed:
+            fusion_comp = (placed.GetFusionCompByIndex(1)
+                           if hasattr(placed, "GetFusionCompByIndex") else None)
+            if fusion_comp:
+                text_node = fusion_comp.FindTool("PestoText")
+                if not text_node:
+                    tools = fusion_comp.GetToolList(False, "TextPlus")
+                    if tools:
+                        text_node = list(tools.values())[0]
+                if text_node:
+                    try:
+                        text_node.SetInput("StyledText", preview_text)
+                    except Exception:
+                        text_node.SetInput("Text", preview_text)
+    except Exception:
+        pass  # Even without text injection, grab what Resolve shows
+
+    # ── Move playhead to frame 15 ────────────────────────────────────
+    mid_tc = _frames_to_tc(15, int(frame_rate))
+    if hasattr(timeline, "SetCurrentTimecode"):
+        timeline.SetCurrentTimecode(mid_tc)
+    time.sleep(0.3)
+
+    # ── GrabStill ────────────────────────────────────────────────────
+    still = timeline.GrabStill()
+    if not still:
+        _remove_clip_at(timeline, thumb_track, 0)
+        raise RuntimeError("GrabStill() fehlgeschlagen. Bitte Resolve auf Edit/Cut-Page wechseln.")
+
+    # ── Export PNG ───────────────────────────────────────────────────
+    thumb_b64 = None
+    with tempfile.TemporaryDirectory() as tmp:
+        gallery = project.GetGallery()
+        album   = gallery.GetCurrentStillAlbum()
+        if album:
+            album.ExportStills([still], tmp, "pesto_preview", "PNG")
+            time.sleep(0.6)
+            pngs = sorted(pathlib.Path(tmp).glob("*.png"))
+            if pngs:
+                thumb_b64 = base64.b64encode(pngs[0].read_bytes()).decode()
+        try:
+            album.DeleteStills([still])
+        except Exception:
+            pass
+
+    # ── Cleanup: remove placed clip ───────────────────────────────────
+    _remove_clip_at(timeline, thumb_track, 0)
+
+    if not thumb_b64:
+        raise RuntimeError("Still konnte nicht exportiert werden.")
+    return thumb_b64
+
+
 # ── Native transcription ───────────────────────────────────────────
 
 def transcribe_native(language: str = "auto", progress_cb=None) -> dict:
