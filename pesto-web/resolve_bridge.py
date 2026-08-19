@@ -234,20 +234,131 @@ def scan_templates(bin_name: str = "Pesto Captions") -> list:
     templates = []
     for clip in (folder.GetClipList() or []):
         name = clip.GetName()
-        thumb = _make_placeholder_thumbnail(name)
+        # Try to grab a real thumbnail via GrabStill; fall back to SVG placeholder
+        thumb = _grab_template_thumbnail(clip, project) or _make_placeholder_thumbnail(name)
         templates.append({
             "clipName": name,
             "thumbnail": thumb,
             "sourceBinType": bin_type,
-            "nodeNameOk": True,  # Checked during apply
+            "nodeNameOk": True,
             "fallbackNodeName": None,
         })
 
     return templates
 
 
+def _grab_template_thumbnail(clip, project) -> Optional[str]:
+    """
+    Grab a real thumbnail from a Fusion Title / Text+ clip.
+
+    Strategy (non-destructive):
+    1. Get the current active timeline.
+    2. Place the clip for 1 second on a very high video track (V20)
+       at the very beginning (frame 0), so it doesn't overlap anything real.
+    3. Move the playhead to frame 15 (half-second mark).
+    4. Call GrabStill() → adds a still to the gallery.
+    5. Export the still as PNG to a temp folder.
+    6. Read the PNG, encode as base64.
+    7. Delete the placed clip and the gallery still.
+    """
+    import tempfile, glob, time, pathlib
+
+    try:
+        timeline = project.GetCurrentTimeline()
+        if not timeline:
+            return None
+
+        media_pool = project.GetMediaPool()
+        frame_rate = float(timeline.GetSetting("timelineFrameRate") or 25)
+        duration   = int(frame_rate)  # 1 second
+        thumb_track = 20              # High track — won't interfere with real content
+
+        # Ensure the track exists
+        while timeline.GetTrackCount("video") < thumb_track:
+            timeline.AddTrack("video")
+
+        # Place clip at frame 0 on the thumb track
+        clip_info = {
+            "mediaPoolItem": clip,
+            "startFrame": 0,
+            "endFrame": duration - 1,
+            "trackIndex": thumb_track,
+            "recordFrame": 0,
+        }
+        added = media_pool.AppendToTimeline([clip_info])
+        if not added:
+            return None
+
+        # Move playhead to frame 15 (mid-second) for a good frame
+        mid_tc = _frames_to_tc(15, int(frame_rate))
+        if hasattr(timeline, "SetCurrentTimecode"):
+            timeline.SetCurrentTimecode(mid_tc)
+        time.sleep(0.2)  # Let Resolve update the viewer
+
+        # Grab still from gallery
+        still = timeline.GrabStill()
+        if not still:
+            _remove_clip_at(timeline, thumb_track, 0)
+            return None
+
+        # Export still to temp dir
+        with tempfile.TemporaryDirectory() as tmp:
+            gallery = project.GetGallery()
+            album   = gallery.GetCurrentStillAlbum()
+            if not album:
+                _remove_clip_at(timeline, thumb_track, 0)
+                return None
+
+            ok = album.ExportStills([still], tmp, "pesto_thumb", "PNG")
+            time.sleep(0.5)  # Wait for file write
+
+            pngs = sorted(pathlib.Path(tmp).glob("pesto_thumb*.png"))
+            if not pngs:
+                # Try without prefix filter
+                pngs = sorted(pathlib.Path(tmp).glob("*.png"))
+
+            thumb_b64 = None
+            if pngs:
+                thumb_b64 = base64.b64encode(pngs[0].read_bytes()).decode()
+
+            # Clean up: delete still from gallery
+            try:
+                album.DeleteStills([still])
+            except Exception:
+                pass
+
+        # Clean up: remove the clip we placed
+        _remove_clip_at(timeline, thumb_track, 0)
+        return thumb_b64
+
+    except Exception:
+        return None
+
+
+def _frames_to_tc(frame: int, fps: int) -> str:
+    h  = frame // (fps * 3600)
+    m  = (frame % (fps * 3600)) // (fps * 60)
+    s  = (frame % (fps * 60)) // fps
+    f  = frame % fps
+    return f"{h:02d}:{m:02d}:{s:02d}:{f:02d}"
+
+
+def _remove_clip_at(timeline, track_index: int, record_frame: int):
+    """Remove the first clip found at `record_frame` on `track_index`."""
+    try:
+        items = timeline.GetItemListInTrack("video", track_index) or []
+        for item in items:
+            if abs(item.GetStart() - record_frame) < 5:
+                timeline.DeleteClips([item])
+                break
+    except Exception:
+        pass
+
+
+
 def _make_placeholder_thumbnail(name: str) -> str:
     """Generate a base64-encoded SVG thumbnail with the clip name."""
+
     # Truncate long names for the thumbnail
     display = name[:18] + "…" if len(name) > 18 else name
     # Escape XML special chars
