@@ -855,9 +855,43 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
+// ── Resolve-Verbindungsüberwachung ────────────────────────────────────
+// Prüft alle 4 Sekunden ob Resolve noch läuft.
+// 3 aufeinanderfolgende Fehler → Fenster schließen.
+let _resolveCheckFails = 0;
+let _resolveWasConnected = false;
+
+async function checkResolveLiveness() {
+  // Erst prüfen wenn mindestens einmal verbunden war
+  if (!_resolveWasConnected) {
+    try {
+      const r = await getResolve();
+      if (r) _resolveWasConnected = true;
+    } catch {}
+    return;
+  }
+
+  try {
+    const r = resolveObj; // kein erneutes Initialisieren — prüft bestehende Verbindung
+    if (!r) throw new Error('Kein Resolve-Objekt');
+    await r.GetProductName(); // leichter Liveness-Call
+    _resolveCheckFails = 0;
+  } catch {
+    _resolveCheckFails++;
+    console.warn(`[Pesto] Resolve nicht erreichbar (${_resolveCheckFails}/3)`);
+    if (_resolveCheckFails >= 3) {
+      console.log('[Pesto] Resolve geschlossen → Pesto beendet sich');
+      await cleanupResolve();
+      app.quit();
+    }
+  }
+}
+
 app.whenReady().then(() => {
   ensureDirs();
   createWindow();
+  // Health-Check alle 4 Sekunden
+  setInterval(checkResolveLiveness, 4000);
 });
 
 app.on('window-all-closed', () => {
