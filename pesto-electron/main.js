@@ -358,10 +358,12 @@ ipcMain.handle('pesto:transcribe', async (event, { engine, language, modelSize }
       let trackCount = 0;
       try { trackCount = await tl.GetTrackCount('subtitle'); } catch {}
 
+      // Nur den letzten Subtitle-Track lesen — Resolve legt den besten/längsten
+      // Phrasen-Track zuletzt an. Alle Tracks zu lesen würde Phrasen doppeln.
       const phrases = [];
-      for (let i = 1; i <= trackCount; i++) {
+      if (trackCount > 0) {
         try {
-          const items = await tl.GetItemListInTrack('subtitle', i);
+          const items = await tl.GetItemListInTrack('subtitle', trackCount);
           for (const item of (items || [])) {
             try {
               const start = (await item.GetStart()) / fps;
