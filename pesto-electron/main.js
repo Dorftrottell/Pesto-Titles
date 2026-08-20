@@ -856,33 +856,54 @@ function createWindow() {
 }
 
 // ── Resolve-Verbindungsüberwachung ────────────────────────────────────
-// Prüft alle 4 Sekunden ob Resolve noch läuft.
-// 3 aufeinanderfolgende Fehler → Fenster schließen.
+// Prüft alle 3 Sekunden ob Resolve noch läuft.
+// WICHTIG: WI-API-Calls hängen unendlich wenn Resolve weg ist (kein Fehler!).
+// → Jeder Call wird mit einem Timeout gewrappt.
+// → Bei Shutdown: process.exit(0) statt app.quit() (kein Warten auf Hooks).
+
 let _resolveCheckFails = 0;
 let _resolveWasConnected = false;
+let _shutdownStarted = false;
+
+// Timeout-Wrapper: wirft nach `ms` Millisekunden einen Fehler
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`WI API Timeout nach ${ms}ms`)), ms)
+    ),
+  ]);
+}
 
 async function checkResolveLiveness() {
+  if (_shutdownStarted) return;
+
   // Erst prüfen wenn mindestens einmal verbunden war
   if (!_resolveWasConnected) {
     try {
-      const r = await getResolve();
+      const r = await withTimeout(getResolve(), 2000);
       if (r) _resolveWasConnected = true;
     } catch {}
     return;
   }
 
   try {
-    const r = resolveObj; // kein erneutes Initialisieren — prüft bestehende Verbindung
+    const r = resolveObj;
     if (!r) throw new Error('Kein Resolve-Objekt');
-    await r.GetProductName(); // leichter Liveness-Call
+    // 1.5s Timeout — wenn Resolve weg ist, hängt dieser Call sonst für immer
+    await withTimeout(r.GetProductName(), 1500);
     _resolveCheckFails = 0;
-  } catch {
+  } catch (e) {
     _resolveCheckFails++;
-    console.warn(`[Pesto] Resolve nicht erreichbar (${_resolveCheckFails}/3)`);
-    if (_resolveCheckFails >= 3) {
-      console.log('[Pesto] Resolve geschlossen → Pesto beendet sich');
-      await cleanupResolve();
-      app.quit();
+    console.warn(`[Pesto] Resolve nicht erreichbar (${_resolveCheckFails}/2): ${e.message}`);
+    if (_resolveCheckFails >= 2) {
+      _shutdownStarted = true;
+      console.log('[Pesto] Resolve geschlossen → sofortiger Exit');
+      // process.exit(0) statt app.quit():
+      // app.quit() wartet auf beforeunload-Events und CleanUp-Hooks,
+      // die bei einem toten Resolve selbst hängen würden.
+      try { if (WorkflowIntegration) WorkflowIntegration.CleanUp(); } catch {}
+      process.exit(0);
     }
   }
 }
@@ -890,12 +911,12 @@ async function checkResolveLiveness() {
 app.whenReady().then(() => {
   ensureDirs();
   createWindow();
-  // Health-Check alle 4 Sekunden
-  setInterval(checkResolveLiveness, 4000);
+  // Health-Check alle 3 Sekunden (~6s bis zum Exit nach Resolve-Schließen)
+  setInterval(checkResolveLiveness, 3000);
 });
 
 app.on('window-all-closed', () => {
-  cleanupResolve();
+  if (!_shutdownStarted) cleanupResolve();
   if (process.platform !== 'darwin') app.quit();
 });
 
