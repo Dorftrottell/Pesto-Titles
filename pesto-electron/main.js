@@ -574,7 +574,6 @@ async function runWhisper(event, proj, tl, { language, modelSize }) {
   }
 }
 
-
 // ── IPC: Apply ────────────────────────────────────────────────────────
 ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, trackTarget }) => {
   try {
@@ -590,19 +589,19 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
       fps = parseFloat(await proj.GetSetting('timelineFrameRate')) || 24;
     } catch {}
 
-    // Auto-create bin if missing
+    // ── Bin sicherstellen ────────────────────────────────────────────
     const { folder, created: binCreated } = await ensureBin(binName || 'Pesto Titles');
-    if (!folder) return { ok: false, error: `Bin '${binName || 'Pesto Titles'}' nicht gefunden und konnte nicht erstellt werden` };
+    if (!folder) return { ok: false, error: `Bin '${binName || 'Pesto Titles'}' konnte nicht erstellt werden` };
 
-    // 2. Search template clip across the entire media pool (not just the bin)
-    async function findClipAnywhere(folder, name) {
+    // ── Template-Clip im Media Pool suchen ──────────────────────────
+    async function findClipAnywhere(f, name) {
       let clips = [];
-      try { clips = await folder.GetClipList(); } catch {}
+      try { clips = await f.GetClipList(); } catch {}
       for (const c of (clips || [])) {
         try { if (await c.GetName() === name) return c; } catch {}
       }
       let subs = [];
-      try { subs = await folder.GetSubFolderList(); } catch {}
+      try { subs = await f.GetSubFolderList(); } catch {}
       for (const sub of subs) {
         const found = await findClipAnywhere(sub, name);
         if (found) return found;
@@ -614,38 +613,42 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
     let templateClip = await findClipAnywhere(rootFolder, templateClipName);
     if (!templateClip) return { ok: false, error: `Template '${templateClipName}' nicht im Media Pool gefunden` };
 
-    // Move clip into the Pesto bin if it isn't already there
+    // ── Clip in Pesto-Bin verschieben (falls noch nicht dort) ────────
     let clipPlacedInBin = false;
+    const mp = await getMediaPool();
     try {
-      const binClips = await folder.GetClipList() || [];
-      const alreadyThere = binClips.some
-        ? binClips.some(async c => { try { return await c.GetName() === templateClipName; } catch { return false; } })
-        : false;
-      if (!alreadyThere) {
+      const binClipList = await folder.GetClipList() || [];
+      let alreadyThere = false;
+      for (const c of binClipList) {
+        try { if (await c.GetName() === templateClipName) { alreadyThere = true; break; } } catch {}
+      }
+      if (!alreadyThere && mp) {
         await mp.MoveClips([templateClip], folder);
         clipPlacedInBin = true;
-        // Re-fetch after move
         templateClip = await findClipAnywhere(rootFolder, templateClipName) || templateClip;
       }
     } catch { /* non-critical */ }
 
+    // ── Track bestimmen / anlegen ────────────────────────────────────
     let vTrackCount = 1;
     try { vTrackCount = await tl.GetTrackCount('video'); } catch {}
     const track = trackTarget === 0 ? vTrackCount + 1 : Math.min(trackTarget, vTrackCount + 1);
 
-    const mp     = await getMediaPool();
     const errors = [];
 
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 1: Alle Clips via WI API auf die Timeline platzieren
+    // AppendToTimeline gibt in der WI API true/false zurück (kein Array)
+    // ═══════════════════════════════════════════════════════════════
+    const placedCues = [];
     for (let i = 0; i < cues.length; i++) {
       const cue = cues[i];
-      event.sender.send('pesto:applyProgress', { current: i + 1, total: cues.length });
+      event.sender.send('pesto:applyProgress', { current: i + 1, total: cues.length * 2 });
       try {
         const startFrame = Math.round(cue.startSec * fps);
         const dur        = Math.round((cue.endSec - cue.startSec) * fps);
         if (dur <= 0) continue;
 
-        // ── 1. Clip auf Timeline platzieren ──────────────────────────
-        // In der WI API gibt AppendToTimeline true/false zurück (kein Item-Array)
         const ok = await mp.AppendToTimeline([{
           mediaPoolItem: templateClip,
           startFrame:    0,
@@ -656,55 +659,54 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
 
         if (!ok) {
           errors.push(`Cue ${i + 1}: Platzierung fehlgeschlagen`);
-          continue;
+        } else {
+          placedCues.push({ ...cue, startFrame });
         }
-
-        // ── 2. Platziertes Timeline-Item per Position suchen ──────────
-        // GetItemListInTrack gibt ein Objekt { 1: item, 2: item, ... } zurück
-        await new Promise(r => setTimeout(r, 80));
-        let placedItem = null;
-        try {
-          const itemMap = await tl.GetItemListInTrack('video', track);
-          const itemList = itemMap ? Object.values(itemMap) : [];
-          for (const item of itemList) {
-            try {
-              const s = await item.GetStart();
-              if (Math.abs(s - startFrame) < 3) { placedItem = item; break; }
-            } catch {}
-          }
-        } catch {}
-
-        if (!placedItem) {
-          errors.push(`Cue ${i + 1}: Clip auf Track nicht gefunden`);
-          continue;
-        }
-
-        // ── 3. Text in Fusion-Node setzen ─────────────────────────────
-        try {
-          const comp = await placedItem.GetFusionCompByIndex(1);
-          if (comp) {
-            let textNode = null;
-            try { textNode = await comp.FindTool('PestoText'); } catch {}
-            if (!textNode) {
-              try {
-                const toolMap = await comp.GetToolList(false, 'TextPlus');
-                if (toolMap) {
-                  const nodes = Object.values(toolMap);
-                  if (nodes.length) textNode = nodes[0];
-                }
-              } catch {}
-            }
-            if (textNode) {
-              try { await textNode.SetInput('StyledText', cue.text); } catch {
-                try { await textNode.SetInput('Text', cue.text); } catch {}
-              }
-            } else {
-              errors.push(`Cue ${i + 1}: Kein TextPlus-Node im Template gefunden`);
-            }
-          }
-        } catch {}
       } catch (err) {
         errors.push(`Cue ${i + 1}: ${err.message}`);
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PHASE 2: Text über Python-Scripting-API setzen
+    // Die WI API hat keinen Zugriff auf Fusion-Node-Internals —
+    // die reguläre Scripting API schon.
+    // ═══════════════════════════════════════════════════════════════
+    if (placedCues.length > 0) {
+      try {
+        const { execFile } = require('child_process');
+        const { promisify } = require('util');
+        const execFileAsync = promisify(execFile);
+
+        const scriptPath = path.join(__dirname, 'pesto_set_text.py');
+        const tmpJson    = path.join(os.tmpdir(), `pesto-cues-${Date.now()}.json`);
+        fs.writeFileSync(tmpJson, JSON.stringify({
+          trackIndex: track,
+          fps,
+          cues: placedCues.map(c => ({ startSec: c.startSec, text: c.text })),
+        }), 'utf-8');
+
+        event.sender.send('pesto:applyProgress', { current: cues.length * 2, total: cues.length * 2 });
+
+        // Python aufrufen (Resolve Scripting API)
+        let pyResult = null;
+        for (const py of ['python3', 'python']) {
+          try {
+            const { stdout } = await execFileAsync(py, [scriptPath, tmpJson], { timeout: 60000 });
+            pyResult = JSON.parse(stdout.trim());
+            break;
+          } catch {}
+        }
+
+        try { fs.unlinkSync(tmpJson); } catch {}
+
+        if (pyResult && !pyResult.ok) {
+          errors.push(`Text-Setzung fehlgeschlagen: ${pyResult.error}`);
+        } else if (pyResult && pyResult.errors?.length) {
+          errors.push(...pyResult.errors.slice(0, 5));
+        }
+      } catch (e) {
+        errors.push(`Python-Script-Fehler: ${e.message}`);
       }
     }
 
