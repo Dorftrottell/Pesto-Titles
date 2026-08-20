@@ -658,11 +658,30 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
         }
 
         try {
-          const comp  = await placed[0].GetFusionCompByIndex(1);
+          // Kurze Pause — Resolve braucht einen Moment um die Fusion-Komp zu initialisieren
+          await new Promise(r => setTimeout(r, 50));
+          const comp = await placed[0].GetFusionCompByIndex(1);
           if (comp) {
-            const tools = await comp.GetToolList(false, 'TextPlus');
-            for (const t of (tools || [])) {
-              try { await t.SetInput('StyledText', cue.text); } catch {}
+            // 1. Versuch: PestoText-Node direkt finden
+            let textNode = null;
+            try { textNode = await comp.FindTool('PestoText'); } catch {}
+
+            // 2. Fallback: ersten TextPlus-Node aus GetToolList verwenden
+            // GetToolList gibt ein Objekt zurück { 1: tool, ... }, kein Array
+            if (!textNode) {
+              try {
+                const toolMap = await comp.GetToolList(false, 'TextPlus');
+                if (toolMap) {
+                  const nodes = Object.values(toolMap);
+                  if (nodes.length) textNode = nodes[0];
+                }
+              } catch {}
+            }
+
+            if (textNode) {
+              try { await textNode.SetInput('StyledText', cue.text); } catch {
+                try { await textNode.SetInput('Text', cue.text); } catch {}
+              }
             }
           }
         } catch {}
