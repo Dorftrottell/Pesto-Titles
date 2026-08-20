@@ -594,7 +594,7 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
     const { folder, created: binCreated } = await ensureBin(binName || 'Pesto Titles');
     if (!folder) return { ok: false, error: `Bin '${binName || 'Pesto Titles'}' nicht gefunden und konnte nicht erstellt werden` };
 
-    // Search template clip across the entire media pool (not just the bin)
+    // 2. Search template clip across the entire media pool (not just the bin)
     async function findClipAnywhere(folder, name) {
       let clips = [];
       try { clips = await folder.GetClipList(); } catch {}
@@ -644,7 +644,9 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
         const dur        = Math.round((cue.endSec - cue.startSec) * fps);
         if (dur <= 0) continue;
 
-        const placed = await mp.AppendToTimeline([{
+        // ── 1. Clip auf Timeline platzieren ──────────────────────────
+        // In der WI API gibt AppendToTimeline true/false zurück (kein Item-Array)
+        const ok = await mp.AppendToTimeline([{
           mediaPoolItem: templateClip,
           startFrame:    0,
           endFrame:      dur,
@@ -652,22 +654,37 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
           recordFrame:   startFrame,
         }]);
 
-        if (!placed || !placed[0]) {
+        if (!ok) {
           errors.push(`Cue ${i + 1}: Platzierung fehlgeschlagen`);
           continue;
         }
 
+        // ── 2. Platziertes Timeline-Item per Position suchen ──────────
+        // GetItemListInTrack gibt ein Objekt { 1: item, 2: item, ... } zurück
+        await new Promise(r => setTimeout(r, 80));
+        let placedItem = null;
         try {
-          // Kurze Pause — Resolve braucht einen Moment um die Fusion-Komp zu initialisieren
-          await new Promise(r => setTimeout(r, 50));
-          const comp = await placed[0].GetFusionCompByIndex(1);
+          const itemMap = await tl.GetItemListInTrack('video', track);
+          const itemList = itemMap ? Object.values(itemMap) : [];
+          for (const item of itemList) {
+            try {
+              const s = await item.GetStart();
+              if (Math.abs(s - startFrame) < 3) { placedItem = item; break; }
+            } catch {}
+          }
+        } catch {}
+
+        if (!placedItem) {
+          errors.push(`Cue ${i + 1}: Clip auf Track nicht gefunden`);
+          continue;
+        }
+
+        // ── 3. Text in Fusion-Node setzen ─────────────────────────────
+        try {
+          const comp = await placedItem.GetFusionCompByIndex(1);
           if (comp) {
-            // 1. Versuch: PestoText-Node direkt finden
             let textNode = null;
             try { textNode = await comp.FindTool('PestoText'); } catch {}
-
-            // 2. Fallback: ersten TextPlus-Node aus GetToolList verwenden
-            // GetToolList gibt ein Objekt zurück { 1: tool, ... }, kein Array
             if (!textNode) {
               try {
                 const toolMap = await comp.GetToolList(false, 'TextPlus');
@@ -677,11 +694,12 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
                 }
               } catch {}
             }
-
             if (textNode) {
               try { await textNode.SetInput('StyledText', cue.text); } catch {
                 try { await textNode.SetInput('Text', cue.text); } catch {}
               }
+            } else {
+              errors.push(`Cue ${i + 1}: Kein TextPlus-Node im Template gefunden`);
             }
           }
         } catch {}
