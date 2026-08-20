@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pesto Titles</title>
+  <meta name="description" content="Caption-Integration für DaVinci Resolve — ohne Paywall, ohne Konto.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Header ─────────────────────────────────────────────────── -->
+  <header class="header">
+    <span class="logo"><svg class="icon" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10c0-1.5-.3-2.9-.9-4.2C19.4 5.8 16 3 12 2z"/><path d="M12 2c0 6-4 10-10 10"/></svg> Pesto <em>Captions</em></span>
+    <div class="header-right">
+      <div id="badge" class="badge">
+        <span class="badge__dot"></span>
+        <span class="badge__text" id="badge-text">Nicht verbunden</span>
+      </div>
+      <button class="btn btn--primary btn--sm" id="connect-btn"><svg class="icon" viewBox="0 0 24 24"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Verbinden</button>
+    </div>
+  </header>
+
+  <!-- ── Tabs ──────────────────────────────────────────────────── -->
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="transcription"><svg class="icon" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg> Transkription</button>
+    <button class="tab" data-tab="styles"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="10" r="3"/><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662"/></svg> Stile & Templates</button>
+    <button class="tab" data-tab="apply"><svg class="icon" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg> Anwenden</button>
+    <button class="tab" data-tab="settings"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> Einstellungen</button>
+    <div class="tab-indicator" id="tab-indicator"></div>
+  </nav>
+
+  <!-- ── Main ──────────────────────────────────────────────────── -->
+  <main class="main" id="main">
+
+    <!-- ══════════════════════════════════════════════════════════
+         TRANSKRIPTION
+         ══════════════════════════════════════════════════════════ -->
+    <section class="panel active" id="panel-transcription">
+
+      <!-- Engine -->
+      <div class="card">
+        <div class="section-header">
+          <h2 class="section-title">Transkriptions-Engine</h2>
+        </div>
+        <div class="engine-grid">
+          <label class="engine-card selected" id="card-native">
+            <input type="radio" name="engine" value="native" checked>
+            <span class="engine-card__icon"><svg class="icon" viewBox="0 0 24 24"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
+            <div>
+              <div class="engine-card__title">Resolve Nativ</div>
+              <div class="engine-card__desc">Schnell · kein Download · in Resolve integriert</div>
+            </div>
+          </label>
+          <label class="engine-card" id="card-whisper">
+            <input type="radio" name="engine" value="whisper">
+            <span class="engine-card__icon"><svg class="icon icon--lg" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></span>
+            <div>
+              <div class="engine-card__title">Whisper (lokal)</div>
+              <div class="engine-card__desc">Wort-Zeitstempel · small / medium Modell</div>
+            </div>
+          </label>
+        </div>
+
+        <div class="flex gap-md mt-md items-center" style="flex-wrap:wrap; gap: 12px 20px;">
+          <div class="flex items-center gap-sm">
+            <label for="lang-select" style="color:var(--text2);font-weight:500;white-space:nowrap;">Sprache</label>
+            <select id="lang-select" style="width:180px;">
+              <option value="auto">Automatisch erkennen</option>
+              <option value="de">Deutsch</option>
+              <option value="en">English</option>
+              <option value="fr">Français</option>
+              <option value="es">Español</option>
+              <option value="it">Italiano</option>
+              <option value="ja">日本語</option>
+              <option value="zh">中文</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-sm" id="model-row" style="display:none!important;">
+            <label style="color:var(--text2);font-weight:500;white-space:nowrap;">Modell</label>
+            <select id="model-select" style="width:160px;">
+              <option value="small">small — schneller</option>
+              <option value="medium">medium — genauer</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="flex gap-sm mt-md">
+          <button class="btn btn--primary btn--lg" id="transcribe-btn" style="flex:1;">
+            Transkribieren
+          </button>
+          <button class="btn btn--ghost btn--sm" id="import-srt-btn" title="SRT/VTT importieren">
+            SRT importieren
+          </button>
+          <input type="file" id="srt-file-input" accept=".srt,.vtt" style="display:none;">
+        </div>
+      </div>
+
+      <!-- Progress -->
+      <div class="card hidden" id="progress-card">
+        <div class="progress-wrap">
+          <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+          <p class="progress-label" id="progress-label">Starte …</p>
+        </div>
+      </div>
+
+      <!-- Alert -->
+      <div id="transcribe-alert" class="hidden"></div>
+
+      <!-- Cue editor -->
+      <div class="card hidden" id="cue-card">
+        <div class="section-header">
+          <h2 class="section-title">
+            Transkript — <span id="cue-count">0</span> Cues
+          </h2>
+          <div class="flex gap-sm">
+            <button class="btn btn--ghost btn--sm" id="reseg-btn" title="Segmentierung mit aktuellen Einstellungen neu berechnen">
+              Neu segmentieren
+            </button>
+          </div>
+        </div>
+        <div class="cue-list-wrap">
+          <div class="cue-list-head">
+            <span>#</span><span>Start</span><span>Ende</span><span>Text</span>
+          </div>
+          <div id="cue-list"></div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════
+         STILE & TEMPLATES
+         ══════════════════════════════════════════════════════════ -->
+    <section class="panel" id="panel-styles">
+
+      <div class="card">
+        <div class="section-header">
+          <h2 class="section-title">Stile &amp; Templates</h2>
+          <button class="btn btn--ghost btn--sm" id="refresh-templates-btn"><svg class="icon" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Aktualisieren</button>
+        </div>
+
+        <div id="gallery-empty" class="empty-state">
+          <div class="empty-state__icon"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="10" r="3"/><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662"/></svg></div>
+          <div class="empty-state__title">Keine Templates geladen</div>
+          <p class="text-sm text-muted">Klicke auf "Aktualisieren" um Templates aus dem Bin zu laden.<br>
+             Gespeicherte Stile erscheinen nach dem Laden ebenfalls hier.</p>
+        </div>
+
+        <div class="gallery-scroll" id="gallery" style="display:none;"></div>
+        <div id="gallery-status" class="text-sm text-muted mt-sm"></div>
+      </div>
+
+      <!-- Detail panel -->
+      <div class="detail-panel" id="detail-panel">
+
+        <!-- Live Preview (large) -->
+        <div id="preview-section" style="width:100%;">
+          <div class="section-header" style="margin-bottom:8px;">
+            <h2 class="section-title">Vorschau aus Resolve</h2>
+            <button class="btn btn--primary btn--sm" id="preview-btn">
+              Vorschau laden
+            </button>
+          </div>
+
+          <!-- Preview image area -->
+          <div id="preview-img-wrap" style="
+              width:100%; aspect-ratio:16/9; max-height:360px;
+              background:var(--surface3); border:1px solid var(--border);
+              border-radius:var(--r-md); overflow:hidden;
+              display:flex; align-items:center; justify-content:center;
+              position:relative;">
+            <img id="preview-img" src="" alt="Vorschau"
+                 style="width:100%;height:100%;object-fit:contain;display:none;">
+            <div id="preview-placeholder" style="text-align:center;color:var(--text3);font-size:13px;">
+              <div style="margin-bottom:8px;"><svg viewBox="0 0 24 24" style="width:40px;height:40px;stroke:var(--text3);fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg></div>
+              Template auswählen, dann <strong style="color:var(--text2);">Vorschau</strong> klicken
+            </div>
+            <div id="preview-spinner" class="hidden" style="
+                position:absolute;inset:0;background:rgba(7,13,7,.7);
+                display:flex;align-items:center;justify-content:center;
+                font-size:14px;color:var(--text2);">
+              <svg class="spin" viewBox="0 0 24 24" style="width:20px;height:20px;stroke:var(--text2);fill:none;stroke-width:2;stroke-linecap:round;margin-right:8px"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg> Resolve rendert …
+            </div>
+            <div id="preview-error" class="hidden" style="
+                position:absolute;inset:0;background:rgba(7,13,7,.85);
+                display:flex;flex-direction:column;align-items:center;justify-content:center;
+                gap:8px;padding:16px;text-align:center;">
+              <svg viewBox="0 0 24 24" style="width:28px;height:28px;stroke:var(--warn,#f59e0b);fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              <span id="preview-error-msg" style="font-size:12px;color:var(--error);"></span>
+            </div>
+          </div>
+
+          <p class="text-sm text-muted mt-sm">
+            Zeigt das Thumbnail wie es DaVinci Resolve im Media Pool rendert.
+            Kein Eingriff in deine Timeline.
+          </p>
+        </div>
+
+        <!-- Divider -->
+        <hr style="border:none;border-top:1px solid var(--border);width:100%;margin:4px 0;">
+
+        <!-- Save section (compact, below preview) -->
+        <div style="width:100%;display:flex;flex-direction:column;gap:6px;">
+          <div class="flex gap-sm items-center">
+            <span class="text-sm" style="color:var(--text2);font-weight:600;" id="detail-name">—</span>
+            <span class="text-sm text-muted" id="detail-sub"></span>
+          </div>
+          <div class="detail-save">
+            <input type="text" id="detail-save-input" placeholder="Als Stil speichern …" style="flex:1;">
+            <button class="btn btn--primary" id="detail-save-btn">Speichern</button>
+          </div>
+          <div class="save-status text-muted" id="detail-save-status"></div>
+        </div>
+
+      </div>
+
+
+      <!-- Alert -->
+      <div id="styles-alert" class="hidden"></div>
+
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════
+         ANWENDEN
+         ══════════════════════════════════════════════════════════ -->
+    <section class="panel" id="panel-apply">
+
+      <div class="summary-grid">
+        <div class="summary-card">
+          <div class="summary-card__label">Cues</div>
+          <div class="summary-card__value accent" id="sum-cues">0</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-card__label">Template</div>
+          <div class="summary-card__value" id="sum-template" style="font-size:13px;">—</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-card__label">Ziel-Spur</div>
+          <div class="summary-card__value" id="sum-track">V+1</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-header">
+          <h2 class="section-title">Spur-Ziel</h2>
+        </div>
+        <div class="flex gap-sm items-center">
+          <label style="color:var(--text2);font-weight:500;">Video-Spur</label>
+          <select id="track-select" style="width:220px;">
+            <option value="0">Automatisch (neue Spur anlegen)</option>
+            <option value="1">V1</option>
+            <option value="2">V2</option>
+            <option value="3">V3</option>
+            <option value="4">V4</option>
+            <option value="5">V5</option>
+          </select>
+        </div>
+      </div>
+
+      <button class="btn btn--primary btn--lg w-full" id="apply-btn" style="font-size:15px; padding: 14px;">
+        <svg class="icon" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg> Captions auf Timeline anwenden
+      </button>
+
+      <!-- Progress -->
+      <div class="card hidden" id="apply-progress-card">
+        <div class="progress-wrap">
+          <div class="progress-bar"><div class="progress-fill" id="apply-progress-fill"></div></div>
+          <p class="progress-label" id="apply-progress-label">Starte …</p>
+        </div>
+      </div>
+
+      <!-- Log -->
+      <div class="card hidden" id="apply-log-card">
+        <div class="section-header">
+          <h2 class="section-title">Protokoll</h2>
+          <button class="btn btn--ghost btn--sm" id="clear-log-btn">✕ Leeren</button>
+        </div>
+        <div class="apply-log" id="apply-log"></div>
+      </div>
+
+      <div id="apply-alert" class="hidden"></div>
+
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════
+         EINSTELLUNGEN
+         ══════════════════════════════════════════════════════════ -->
+    <section class="panel" id="panel-settings">
+
+      <!-- Phrasenbildung -->
+      <div class="card">
+        <div class="section-header">
+          <h2 class="section-title">Phrasenbildung &amp; Stilregeln</h2>
+        </div>
+        <div class="settings-grid">
+
+          <div class="settings-row">
+            <label for="maxChars">Max. Zeichen</label>
+            <input type="range" id="maxChars" min="20" max="120" value="42">
+            <span class="val-badge" id="maxChars-val">42</span>
+          </div>
+
+          <div class="settings-row">
+            <label for="maxWords">Max. Wörter</label>
+            <input type="range" id="maxWords" min="2" max="20" value="8">
+            <span class="val-badge" id="maxWords-val">8</span>
+          </div>
+
+          <div class="settings-row">
+            <label for="minDur">Min. Dauer (ms)</label>
+            <input type="number" id="minDur" min="100" max="5000" step="100" value="500" style="max-width:160px;">
+            <span></span>
+          </div>
+
+          <div class="settings-row">
+            <label for="maxDur">Max. Dauer (ms)</label>
+            <input type="number" id="maxDur" min="1000" max="30000" step="500" value="5000" style="max-width:160px;">
+            <span></span>
+          </div>
+
+          <div class="settings-row">
+            <label for="fillGaps">Lücken füllen (ms)</label>
+            <input type="range" id="fillGaps" min="0" max="2000" step="50" value="0">
+            <span class="val-badge" id="fillGaps-val">0</span>
+          </div>
+
+          <div class="settings-row">
+            <label for="casing">Schreibweise</label>
+            <select id="casing" style="max-width:220px;">
+              <option value="unchanged">Unverändert</option>
+              <option value="uppercase">GROSSBUCHSTABEN</option>
+              <option value="lowercase">kleinbuchstaben</option>
+              <option value="sentence">Satzmodus</option>
+            </select>
+            <span></span>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Interpunktion -->
+      <div class="card">
+        <div class="section-header">
+          <h2 class="section-title">Interpunktions-Normalisierung</h2>
+          <span class="text-sm text-muted">Deaktivieren = entfernen</span>
+        </div>
+        <div class="punct-grid">
+          <label class="toggle-row"><input type="checkbox" id="p-comma"           checked>, Komma</label>
+          <label class="toggle-row"><input type="checkbox" id="p-period"          checked>. Punkt</label>
+          <label class="toggle-row"><input type="checkbox" id="p-questionMark"    checked>? Fragezeichen</label>
+          <label class="toggle-row"><input type="checkbox" id="p-exclamationMark" checked>! Ausrufezeichen</label>
+          <label class="toggle-row"><input type="checkbox" id="p-quotes"          checked>„" Anführung</label>
+          <label class="toggle-row"><input type="checkbox" id="p-dash"            checked>– Strich</label>
+          <label class="toggle-row"><input type="checkbox" id="p-semicolon"       checked>; Semikolon</label>
+          <label class="toggle-row"><input type="checkbox" id="p-colon"           checked>: Doppelpunkt</label>
+        </div>
+      </div>
+
+      <!-- Resolve -->
+      <div class="card">
+        <div class="section-header">
+          <h2 class="section-title">Resolve-Anbindung</h2>
+        </div>
+        <div class="settings-row" style="border:none;">
+          <label for="binName">Bin-Name</label>
+          <input type="text" id="binName" value="Pesto Titles" style="max-width:280px;">
+          <span></span>
+        </div>
+      </div>
+
+      <div class="flex gap-sm">
+        <button class="btn" id="save-settings-btn">Einstellungen speichern</button>
+      </div>
+      <div id="settings-status" class="text-sm hidden"></div>
+
+    </section>
+
+  </main>
+
+  <!-- ── Status bar ─────────────────────────────────────────────── -->
+  <footer class="statusbar">
+    <span>Pesto Titles 0.2.0 — AGPL-3.0 · Pesto Production · Witiko Lovis Dietrich 2026</span>
+    <a
+      href="https://github.com/Dorftrottell/Pesto-Titles/issues/new"
+      target="_blank"
+      rel="noopener"
+      id="bug-btn"
+      style="margin-left:auto; display:inline-flex; align-items:center; gap:5px;
+             padding:2px 10px; border-radius:5px; border:1px solid var(--border);
+             color:var(--text3); font-size:11px; text-decoration:none;
+             background:transparent; transition:background .15s, color .15s;"
+      onmouseover="this.style.background='var(--surface3)';this.style.color='var(--text2)'"
+      onmouseout="this.style.background='transparent';this.style.color='var(--text3)'"
+    >Bug / Feature Request</a>
+  </footer>
+
+
+</div><!-- /#app -->
+
+<script src="app.js"></script>
+</body>
+</html>

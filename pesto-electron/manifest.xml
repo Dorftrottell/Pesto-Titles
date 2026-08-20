@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<BlackmagicDesign>
+    <Plugin>
+        <Id>com.pesto.titles</Id>
+        <Name>Pesto Titles</Name>
+        <Version>1.0</Version>
+        <Description>Freie, offene Caption-Integration für DaVinci Resolve Studio — ohne Paywall, ohne Konto, ohne Cloud-Zwang.</Description>
+        <FilePath>main.js</FilePath>
+    </Plugin>
+</BlackmagicDesign>

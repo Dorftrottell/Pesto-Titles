@@ -1,0 +1,22 @@
+{
+  "name": "pesto-titles",
+  "version": "1.0.0",
+  "description": "Freie Caption-Integration für DaVinci Resolve Studio",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "keywords": [
+    "davinci",
+    "resolve",
+    "captions",
+    "subtitles"
+  ],
+  "license": "AGPL-3.0",
+  "devDependencies": {
+    "electron": "^32.0.0"
+  },
+  "allowScripts": {
+    "electron@32.3.3": true
+  }
+}

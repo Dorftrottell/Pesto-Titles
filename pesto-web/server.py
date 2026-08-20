@@ -144,6 +144,62 @@ async def api_status():
     except Exception as exc:
         return {"connected": False, "error": str(exc)}
 
+@app.get("/api/debug/thumbnail")
+async def api_debug_thumbnail(clipName: str = ""):
+    """Debug: inspect what GetThumbnailImage returns for a given clip."""
+    try:
+        resolve = rb.get_resolve()
+        if not resolve:
+            return {"error": "Resolve nicht verbunden"}
+        project = resolve.GetProjectManager().GetCurrentProject()
+        if not project:
+            return {"error": "Kein Projekt"}
+
+        def find_clip(folder, name):
+            for c in (folder.GetClipList() or []):
+                if not name or c.GetName() == name:
+                    return c
+            for sub in (folder.GetSubFolderList() or []):
+                r = find_clip(sub, name)
+                if r:
+                    return r
+            return None
+
+        clip = find_clip(project.GetMediaPool().GetRootFolder(), clipName)
+        if not clip:
+            return {"error": f"Clip '{clipName}' nicht gefunden"}
+
+        info = {
+            "clipName": clip.GetName(),
+            "hasGetThumbnailImage": hasattr(clip, "GetThumbnailImage"),
+            "clipProperties": {},
+        }
+        # Try calling it
+        if hasattr(clip, "GetThumbnailImage"):
+            try:
+                result = clip.GetThumbnailImage()
+                info["result_type"] = type(result).__name__
+                info["result_repr"] = repr(result)[:200]
+                if isinstance(result, dict):
+                    info["result_keys"] = list(result.keys())
+                    if "data" in result:
+                        info["data_len"] = len(result["data"])
+            except Exception as e:
+                info["call_error"] = str(e)
+        else:
+            info["note"] = "GetThumbnailImage existiert nicht auf diesem Objekt"
+        # Get available clip props
+        for prop in ["Type", "File Path", "Resolution", "FPS"]:
+            try:
+                info["clipProperties"][prop] = clip.GetClipProperty(prop)
+            except Exception:
+                pass
+        return info
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+
 @app.post("/api/connect")
 async def api_connect():
     try:
