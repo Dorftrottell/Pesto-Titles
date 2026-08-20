@@ -693,6 +693,27 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
 
     const errors = [];
 
+    // ── FPS-Mismatch-Check (wie Snap Captions) ───────────────────────
+    // Template-FPS ≠ Timeline-FPS → Clips haben falsche Dauer
+    try {
+      const props = await templateClip.GetClipProperty();
+      const templateFps = parseFloat(props?.FPS || props?.['Frame Rate'] || fps);
+      if (Math.abs(templateFps - fps) > 0.5) {
+        errors.push(
+          `⚠️ FPS-Konflikt: Template ist ${templateFps}fps, Timeline ist ${fps}fps. ` +
+          `Bitte das Template mit ${fps}fps neu erstellen um Timing-Fehler zu vermeiden.`
+        );
+      }
+    } catch {}
+
+    // ── 500-Clip-Limit (Resolve Performance-Warnung) ─────────────────
+    if (cues.length > 500) {
+      errors.push(
+        `⚠️ ${cues.length} Cues sind viel — über 500 kann Resolve bei der Wiedergabe ins Stocken geraten. ` +
+        `Empfehlung: max. 500 Cues pro Apply, dann Resolve neu starten.`
+      );
+    }
+
     event.sender.send('pesto:applyProgress', { current: 1, total: 3 });
 
     // ═══════════════════════════════════════════════════════════════

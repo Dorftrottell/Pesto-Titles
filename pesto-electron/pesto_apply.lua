@@ -138,7 +138,27 @@ if #clip_array == 0 then
   os.exit(1)
 end
 
--- Einmaliger Batch-Call mit allen Clips
+-- ── Timeline-Start-Frame als absoluten Offset holen ────────────────
+-- Resolve-Timelines beginnen oft NICHT bei Frame 0 (typisch: 01:00:00:00).
+-- recordFrame ist eine ABSOLUTE Timeline-Position, cue.startSec ist relativ.
+-- Ohne diesen Offset werden alle Clips am falschen Ort platziert!
+local tl_start = 0
+pcall(function()
+  tl_start = timeline:GetStartFrame() or 0
+end)
+
+-- Track-Validierung
+local tl_track_count = 0
+pcall(function() tl_track_count = timeline:GetTrackCount("video") end)
+if track_index > tl_track_count + 1 then
+  io.write('{"ok":false,"error":"Video-Track ' .. track_index .. ' existiert nicht (vorhandene Tracks: ' .. tl_track_count .. ')"}')
+  os.exit(1)
+end
+
+-- recordFrame-Offset auf alle Clips anwenden
+for i, clip_info in ipairs(clip_array) do
+  clip_array[i].recordFrame = clip_array[i].recordFrame + tl_start
+end
 local place_ok = false
 pcall(function()
   local result = mp:AppendToTimeline(clip_array)
