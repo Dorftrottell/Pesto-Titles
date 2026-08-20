@@ -831,12 +831,20 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
         }
         if (scriptResult) break;
       } catch (e) {
+        // execFile throws if exit code != 0 (e.g. os.exit(1) in lua)
+        if (e.stdout) {
+          const lines = e.stdout.trim().split('\n');
+          for (let li = lines.length - 1; li >= 0; li--) {
+            try { scriptResult = JSON.parse(lines[li]); break; } catch {}
+          }
+        }
+        if (scriptResult) break;
         console.warn('[Pesto] pesto_apply.lua fehlgeschlagen:', e.message);
       }
     }
 
     // ── Fallback: WI API Placement + pesto_set_text.lua (Text only) ──
-    // Falls fuscript nicht verfügbar ist
+    // Falls fuscript nicht verfügbar ist (oder komplett fehlschlug, ohne JSON)
     if (!scriptResult) {
       console.warn('[Pesto] Fallback auf WI API + pesto_set_text.lua');
       try {
@@ -862,7 +870,15 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
             try { scriptResult = JSON.parse(lines[li]); break; } catch {}
           }
           if (scriptResult) break;
-        } catch {}
+        } catch (e) {
+          if (e.stdout) {
+            const lines = e.stdout.trim().split('\n');
+            for (let li = lines.length - 1; li >= 0; li--) {
+              try { scriptResult = JSON.parse(lines[li]); break; } catch {}
+            }
+          }
+          if (scriptResult) break;
+        }
       }
     }
 
