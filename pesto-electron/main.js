@@ -12,12 +12,13 @@
 
 const { app, BrowserWindow, ipcMain, nativeImage } = require('electron');
 
-// App-Name und Icon setzen (Dock / Taskbar)
-app.setName('Pesto Titles');
-const ICON_PATH = path.join(__dirname, 'icon.icns');
 const path = require('path');
 const fs   = require('fs');
 const os   = require('os');
+
+// App-Name und Icon setzen (Dock / Taskbar)
+app.setName('Pesto Titles');
+const ICON_PATH = path.join(__dirname, 'icon.icns');
 
 // ── WorkflowIntegration.node ──────────────────────────────────────────
 let WorkflowIntegration = null;
