@@ -587,20 +587,44 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
       fps = parseFloat(await proj.GetSetting('timelineFrameRate')) || 24;
     } catch {}
 
-    const folder = await findFolder(binName || 'Pesto Titles');
-    if (!folder) return { ok: false, error: `Bin '${binName}' nicht gefunden` };
+    // Auto-create bin if missing
+    const { folder, created: binCreated } = await ensureBin(binName || 'Pesto Titles');
+    if (!folder) return { ok: false, error: `Bin '${binName || 'Pesto Titles'}' nicht gefunden und konnte nicht erstellt werden` };
 
-    let clips = [];
-    try { clips = await folder.GetClipList(); } catch {}
-
-    let templateClip = null;
-    for (const c of (clips || [])) {
-      try {
-        const n = await c.GetName();
-        if (n === templateClipName) { templateClip = c; break; }
-      } catch {}
+    // Search template clip across the entire media pool (not just the bin)
+    async function findClipAnywhere(folder, name) {
+      let clips = [];
+      try { clips = await folder.GetClipList(); } catch {}
+      for (const c of (clips || [])) {
+        try { if (await c.GetName() === name) return c; } catch {}
+      }
+      let subs = [];
+      try { subs = await folder.GetSubFolderList(); } catch {}
+      for (const sub of subs) {
+        const found = await findClipAnywhere(sub, name);
+        if (found) return found;
+      }
+      return null;
     }
-    if (!templateClip) return { ok: false, error: `Template '${templateClipName}' nicht gefunden` };
+
+    const rootFolder = await getRootFolder();
+    let templateClip = await findClipAnywhere(rootFolder, templateClipName);
+    if (!templateClip) return { ok: false, error: `Template '${templateClipName}' nicht im Media Pool gefunden` };
+
+    // Move clip into the Pesto bin if it isn't already there
+    let clipPlacedInBin = false;
+    try {
+      const binClips = await folder.GetClipList() || [];
+      const alreadyThere = binClips.some
+        ? binClips.some(async c => { try { return await c.GetName() === templateClipName; } catch { return false; } })
+        : false;
+      if (!alreadyThere) {
+        await mp.MoveClips([templateClip], folder);
+        clipPlacedInBin = true;
+        // Re-fetch after move
+        templateClip = await findClipAnywhere(rootFolder, templateClipName) || templateClip;
+      }
+    } catch { /* non-critical */ }
 
     let vTrackCount = 1;
     try { vTrackCount = await tl.GetTrackCount('video'); } catch {}
@@ -644,7 +668,7 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
       }
     }
 
-    return { ok: true, errors };
+    return { ok: true, errors, binCreated, clipPlacedInBin };
   } catch (e) {
     return { ok: false, error: e.message };
   }
