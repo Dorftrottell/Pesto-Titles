@@ -668,45 +668,72 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // PHASE 2: Text über Python-Scripting-API setzen
-    // Die WI API hat keinen Zugriff auf Fusion-Node-Internals —
-    // die reguläre Scripting API schon.
+    // PHASE 2: Text via Lua (fuscript) oder Python setzen
+    // Die WI API hat keinen Zugriff auf Fusion-Node-Internals.
+    // fuscript ist Resolves eingebauter Lua-Interpreter — kein Python nötig.
     // ═══════════════════════════════════════════════════════════════
     if (placedCues.length > 0) {
-      try {
-        const { execFile } = require('child_process');
-        const { promisify } = require('util');
-        const execFileAsync = promisify(execFile);
+      const { execFile } = require('child_process');
+      const { promisify } = require('util');
+      const execFileAsync = promisify(execFile);
 
-        const scriptPath = path.join(__dirname, 'pesto_set_text.py');
-        const tmpJson    = path.join(os.tmpdir(), `pesto-cues-${Date.now()}.json`);
-        fs.writeFileSync(tmpJson, JSON.stringify({
-          trackIndex: track,
-          fps,
-          cues: placedCues.map(c => ({ startSec: c.startSec, text: c.text })),
-        }), 'utf-8');
+      // Cue-Daten als JSON in Temp-Datei schreiben
+      const tmpJson = path.join(os.tmpdir(), `pesto-cues-${Date.now()}.json`);
+      fs.writeFileSync(tmpJson, JSON.stringify({
+        trackIndex: track,
+        fps,
+        cues: placedCues.map(c => ({ startSec: c.startSec, text: c.text })),
+      }), 'utf-8');
 
-        event.sender.send('pesto:applyProgress', { current: cues.length * 2, total: cues.length * 2 });
+      event.sender.send('pesto:applyProgress', { current: cues.length * 2, total: cues.length * 2 });
 
-        // Python aufrufen (Resolve Scripting API)
-        let pyResult = null;
+      let scriptResult = null;
+
+      // ── Variante 1: Lua via fuscript (kein Python nötig) ─────────
+      const luaScript = path.join(__dirname, 'pesto_set_text.lua');
+      const fuscriptCandidates = [
+        '/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fuscript',
+        '/Applications/DaVinci Resolve Studio/DaVinci Resolve Studio.app/Contents/Libraries/Fusion/fuscript',
+      ];
+
+      for (const fuscript of fuscriptCandidates) {
+        if (!fs.existsSync(fuscript)) continue;
+        try {
+          const { stdout } = await execFileAsync(fuscript, [luaScript, tmpJson], { timeout: 60000 });
+          const lines = stdout.trim().split('\n');
+          // Letztes JSON-Objekt aus stdout nehmen (fuscript kann Debug-Output haben)
+          for (let li = lines.length - 1; li >= 0; li--) {
+            try { scriptResult = JSON.parse(lines[li]); break; } catch {}
+          }
+          if (scriptResult) break;
+        } catch (e) {
+          console.warn('[Pesto] fuscript fehlgeschlagen:', e.message);
+        }
+      }
+
+      // ── Variante 2: Python-Fallback ───────────────────────────────
+      if (!scriptResult) {
+        const pyScript = path.join(__dirname, 'pesto_set_text.py');
         for (const py of ['python3', 'python']) {
           try {
-            const { stdout } = await execFileAsync(py, [scriptPath, tmpJson], { timeout: 60000 });
-            pyResult = JSON.parse(stdout.trim());
-            break;
+            const { stdout } = await execFileAsync(py, [pyScript, tmpJson], { timeout: 60000 });
+            const lines = stdout.trim().split('\n');
+            for (let li = lines.length - 1; li >= 0; li--) {
+              try { scriptResult = JSON.parse(lines[li]); break; } catch {}
+            }
+            if (scriptResult) break;
           } catch {}
         }
+      }
 
-        try { fs.unlinkSync(tmpJson); } catch {}
+      try { fs.unlinkSync(tmpJson); } catch {}
 
-        if (pyResult && !pyResult.ok) {
-          errors.push(`Text-Setzung fehlgeschlagen: ${pyResult.error}`);
-        } else if (pyResult && pyResult.errors?.length) {
-          errors.push(...pyResult.errors.slice(0, 5));
-        }
-      } catch (e) {
-        errors.push(`Python-Script-Fehler: ${e.message}`);
+      if (!scriptResult) {
+        errors.push('Text-Setzung fehlgeschlagen: weder fuscript noch Python verfügbar');
+      } else if (!scriptResult.ok) {
+        errors.push(`Text-Setzung: ${scriptResult.error}`);
+      } else if (scriptResult.errors?.length) {
+        errors.push(...scriptResult.errors.slice(0, 5));
       }
     }
 
