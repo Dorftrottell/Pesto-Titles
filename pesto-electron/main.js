@@ -694,35 +694,54 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
     const errors = [];
 
     // ═══════════════════════════════════════════════════════════════
-    // PHASE 1: Alle Clips via WI API auf die Timeline platzieren
-    // AppendToTimeline gibt in der WI API true/false zurück (kein Array)
+    // PHASE 1: Alle Clips in EINEM AppendToTimeline-Call platzieren
+    //
+    // WICHTIG: AppendToTimeline in der WI API interpretiert recordFrame
+    // falsch wenn es mehrfach in einer Schleife aufgerufen wird —
+    // nur der erste Clip landet an der richtigen Position, alle weiteren
+    // werden sequenziell ANGEHÄNGT statt an die absolute Position gesetzt.
+    //
+    // Lösung: alle Clips als einziges Array übergeben, wie es das
+    // Snap-Captions-Plugin auch macht (dort: makeTextPlus mit allen Cues
+    // in einem Lua-Call).
     // ═══════════════════════════════════════════════════════════════
+
+    // Clip-Array für alle validen Cues aufbauen
+    const clipInfos  = [];
     const placedCues = [];
     for (let i = 0; i < cues.length; i++) {
-      const cue = cues[i];
-      event.sender.send('pesto:applyProgress', { current: i + 1, total: cues.length * 2 });
+      const cue        = cues[i];
+      const startFrame = Math.round(cue.startSec * fps);
+      const dur        = Math.round((cue.endSec - cue.startSec) * fps);
+      if (dur <= 0) continue;
+      clipInfos.push({
+        mediaPoolItem: templateClip,
+        startFrame:    0,
+        endFrame:      dur,
+        trackIndex:    track,
+        recordFrame:   startFrame,
+      });
+      placedCues.push({ ...cue, startFrame });
+    }
+
+    event.sender.send('pesto:applyProgress', { current: 1, total: 3 });
+
+    // Einmaliger Batch-Call — alle Clips auf einmal
+    if (clipInfos.length > 0) {
       try {
-        const startFrame = Math.round(cue.startSec * fps);
-        const dur        = Math.round((cue.endSec - cue.startSec) * fps);
-        if (dur <= 0) continue;
-
-        const ok = await mp.AppendToTimeline([{
-          mediaPoolItem: templateClip,
-          startFrame:    0,
-          endFrame:      dur,
-          trackIndex:    track,
-          recordFrame:   startFrame,
-        }]);
-
+        const ok = await mp.AppendToTimeline(clipInfos);
         if (!ok) {
-          errors.push(`Cue ${i + 1}: Platzierung fehlgeschlagen`);
-        } else {
-          placedCues.push({ ...cue, startFrame });
+          errors.push('Batch-Platzierung fehlgeschlagen (AppendToTimeline returned false)');
+          placedCues.length = 0; // Phase 2 überspringen
         }
       } catch (err) {
-        errors.push(`Cue ${i + 1}: ${err.message}`);
+        errors.push(`AppendToTimeline-Fehler: ${err.message}`);
+        placedCues.length = 0;
       }
     }
+
+    event.sender.send('pesto:applyProgress', { current: 2, total: 3 });
+
 
     // ═══════════════════════════════════════════════════════════════
     // PHASE 2: Text via Lua (fuscript) oder Python setzen
