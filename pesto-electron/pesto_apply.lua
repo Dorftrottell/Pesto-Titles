@@ -178,6 +178,9 @@ for _, cue in ipairs(cues) do
   if not found_item then
     table.insert(errors, "Kein Item @ frame " .. start_frame)
   else
+    -- Orangener Clip-Tag für einfaches Grading-Deaktivieren
+    pcall(function() found_item:SetClipColor("Orange") end)
+
     local ok_comp, comp = pcall(function() return found_item:GetFusionCompByIndex(1) end)
     if not ok_comp or not comp then
       table.insert(errors, "Keine Fusion-Komp @ frame " .. start_frame)
