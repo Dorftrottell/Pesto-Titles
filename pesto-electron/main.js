@@ -306,7 +306,45 @@ ipcMain.handle('pesto:deleteStyle', async (_e, styleId) => {
   }
 });
 
-// ── IPC: Video-Track-Anzahl lesen ─────────────────────────────────────
+// ── IPC: Timeline-Daten (Sammel-Handler, wie Snap Captions getTimelineData) ──
+// Gibt FPS, Track-Anzahlen, Namen UND den absoluten Start-Frame in einem Call.
+// Reduziert IPC-Round-Trips und verhindert Race-Conditions zwischen Calls.
+ipcMain.handle('pesto:getTimelineData', async () => {
+  try {
+    const proj = await getCurrentProject();
+    if (!proj) return { ok: false, error: 'Kein Projekt' };
+    let tl = null;
+    try { tl = await proj.GetCurrentTimeline(); } catch {}
+    if (!tl) return { ok: false, error: 'NO_TIMELINE' };
+
+    const result = { ok: true };
+
+    // FPS
+    try { result.fps = parseFloat(await proj.GetSetting('timelineFrameRate')) || 24; } catch { result.fps = 24; }
+
+    // Timeline-Name
+    try { result.timelineName = await tl.GetName(); } catch { result.timelineName = ''; }
+
+    // Video-Tracks
+    try { result.videoTrackCount = await tl.GetTrackCount('video'); } catch { result.videoTrackCount = 0; }
+
+    // Subtitle-Tracks
+    try { result.subtitleTrackCount = await tl.GetTrackCount('subtitle'); } catch { result.subtitleTrackCount = 0; }
+
+    // Absoluter Start-Frame (KRITISCH für korrekte Clip-Platzierung)
+    // Timelines beginnen oft bei 01:00:00:00, nicht bei 0
+    try { result.startFrame = await tl.GetStartFrame() || 0; } catch { result.startFrame = 0; }
+
+    // Projekt-Name
+    try { result.projectName = await proj.GetName(); } catch { result.projectName = ''; }
+
+    return result;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// Rückwärtskompatibilität: getTrackCount → getTimelineData
 ipcMain.handle('pesto:getTrackCount', async () => {
   try {
     const proj = await getCurrentProject();
@@ -319,6 +357,22 @@ ipcMain.handle('pesto:getTrackCount', async () => {
     return { ok: true, count };
   } catch {
     return { ok: false, count: 0 };
+  }
+});
+
+// Absoluter Timeline-Start-Frame (für Preview-Feature gebraucht)
+ipcMain.handle('pesto:getStartFrame', async () => {
+  try {
+    const proj = await getCurrentProject();
+    if (!proj) return { ok: false, startFrame: 0 };
+    let tl = null;
+    try { tl = await proj.GetCurrentTimeline(); } catch {}
+    if (!tl) return { ok: false, startFrame: 0 };
+    let startFrame = 0;
+    try { startFrame = await tl.GetStartFrame() || 0; } catch {}
+    return { ok: true, startFrame };
+  } catch {
+    return { ok: false, startFrame: 0 };
   }
 });
 

@@ -58,8 +58,16 @@ contextBridge.exposeInMainWorld('pesto', {
     ipcRenderer.removeListener('pesto:applyProgress', cb),
 
   // ── Timeline-Infos ───────────────────────────────────────────────────
+  // Sammel-Handler: FPS, Tracks, Name, StartFrame in einem Call
+  getTimelineData: () =>
+    ipcRenderer.invoke('pesto:getTimelineData'),
+
+  // Einzelabrufe (rückwärtskompatibel)
   getTrackCount: () =>
     ipcRenderer.invoke('pesto:getTrackCount'),
+
+  getStartFrame: () =>
+    ipcRenderer.invoke('pesto:getStartFrame'),
 
   importSubtitles: () =>
     ipcRenderer.invoke('pesto:importSubtitles'),

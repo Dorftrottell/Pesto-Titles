@@ -96,10 +96,20 @@ async function checkStatus() {
   try {
     const data = await window.pesto.getStatus();
     if (data.connected) {
-      state.connected  = true;
+      state.connected   = true;
       state.resolveInfo = data;
       setBadge('connected',
         `${data.projectName || '—'} · ${data.timelineName || '—'} @ ${data.frameRate || '?'} fps`);
+
+      // Timeline-Daten in einem Batch-Call laden (FPS, Tracks, StartFrame)
+      try {
+        const tlData = await window.pesto.getTimelineData();
+        if (tlData?.ok) {
+          state.timelineData = tlData;
+          // Track-Dropdown sofort befüllen
+          populateTrackSelect(tlData.videoTrackCount || 0);
+        }
+      } catch {}
     } else {
       setBadge('', data.error || 'Nicht verbunden');
     }
@@ -723,6 +733,25 @@ async function applyToTimeline() {
     showAlert('apply-alert', 'warn', 'Bitte erst ein Template/Stil in "Stile & Templates" auswählen.');
     return;
   }
+
+  // Pre-Flight: Timeline prüfen
+  const tlData = state.timelineData || {};
+  if (!tlData.ok && tlData.error === 'NO_TIMELINE') {
+    showAlert('apply-alert', 'error', 'Keine Timeline geöffnet. Bitte erst eine Timeline in Resolve öffnen.');
+    return;
+  }
+
+  // 500-Clip-Warnung (wie Snap Captions)
+  const activeCues = state.cues.filter(c => c.text.trim());
+  if (activeCues.length > 500) {
+    const ok = confirm(
+      `Du hast ${activeCues.length} Cues. Über 500 kann Resolve bei der Wiedergabe ins Stocken geraten.\n\n` +
+      `Empfehlung: maximal 500 Cues pro Apply, danach Resolve neu starten.\n\n` +
+      `Trotzdem fortfahren?`
+    );
+    if (!ok) return;
+  }
+
   hideAlert('apply-alert');
   $('apply-btn').disabled = true;
   $('apply-progress-card').classList.remove('hidden');
@@ -734,14 +763,12 @@ async function applyToTimeline() {
   const progressCb = (data) => {
     const pct = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
     $('apply-progress-fill').style.width = pct + '%';
-    $('apply-progress-label').textContent = `Cue ${data.current} von ${data.total} …`;
+    $('apply-progress-label').textContent = `${data.current} von ${data.total} …`;
   };
   window.pesto.onApplyProgress(progressCb);
 
   try {
     const entry  = state.selectedCard.entry;
-    // Leere Cues überspringen — Timestamps bleiben erhalten, kein Clip wird platziert
-    const activeCues = state.cues.filter(c => c.text.trim());
     const result = await window.pesto.apply({
       cues:             activeCues,
       templateClipName: entry.clipName || entry.name || '',
@@ -875,23 +902,28 @@ async function init() {
   $('track-select')?.addEventListener('change', updateApplySummary);
 
   // Spur-Dropdown dynamisch befüllen
-  async function refreshTrackList() {
+  function populateTrackSelect(count) {
     const sel = $('track-select');
     if (!sel) return;
     const prev = sel.value;
+    while (sel.options.length > 1) sel.remove(1);
+    for (let i = 1; i <= count; i++) {
+      const opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = `V${i}`;
+      sel.appendChild(opt);
+    }
+    if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+  }
+
+  async function refreshTrackList() {
     try {
-      const res = await window.pesto.getTrackCount();
-      const count = (res && res.ok) ? res.count : 0;
-      // Alle Optionen außer der ersten (Automatisch) entfernen
-      while (sel.options.length > 1) sel.remove(1);
-      for (let i = 1; i <= count; i++) {
-        const opt = document.createElement('option');
-        opt.value = String(i);
-        opt.textContent = `V${i}`;
-        sel.appendChild(opt);
+      // getTimelineData gibt alles auf einmal zurück (ein IPC-Call statt zwei)
+      const tlData = await window.pesto.getTimelineData();
+      if (tlData?.ok) {
+        state.timelineData = tlData;
+        populateTrackSelect(tlData.videoTrackCount || 0);
       }
-      // Vorherigen Wert wiederherstellen falls möglich
-      if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
     } catch {}
   }
   $('refresh-tracks-btn')?.addEventListener('click', refreshTrackList);

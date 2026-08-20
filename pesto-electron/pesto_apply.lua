@@ -159,6 +159,7 @@ end
 for i, clip_info in ipairs(clip_array) do
   clip_array[i].recordFrame = clip_array[i].recordFrame + tl_start
 end
+
 local place_ok = false
 pcall(function()
   local result = mp:AppendToTimeline(clip_array)
@@ -184,12 +185,14 @@ local errors  = {}
 local matched = 0
 
 for _, cue in ipairs(cues) do
-  local start_frame = math.floor(cue.startSec * fps + 0.5)
-  local text        = cue.text or ""
+  local start_frame     = math.floor(cue.startSec * fps + 0.5)
+  -- GetStart() gibt absolute Timeline-Position zurück (= tl_start + relative_frame)
+  local abs_start_frame = tl_start + start_frame
+  local text            = cue.text or ""
 
   local found_item = nil
   for _, item in pairs(items) do
-    if math.abs(item:GetStart() - start_frame) < 3 then
+    if math.abs(item:GetStart() - abs_start_frame) < 3 then
       found_item = item
       break
     end
