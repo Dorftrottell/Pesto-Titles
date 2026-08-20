@@ -693,137 +693,116 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
 
     const errors = [];
 
-    // ═══════════════════════════════════════════════════════════════
-    // PHASE 1: Alle Clips in EINEM AppendToTimeline-Call platzieren
-    //
-    // WICHTIG: AppendToTimeline in der WI API interpretiert recordFrame
-    // falsch wenn es mehrfach in einer Schleife aufgerufen wird —
-    // nur der erste Clip landet an der richtigen Position, alle weiteren
-    // werden sequenziell ANGEHÄNGT statt an die absolute Position gesetzt.
-    //
-    // Lösung: alle Clips als einziges Array übergeben, wie es das
-    // Snap-Captions-Plugin auch macht (dort: makeTextPlus mit allen Cues
-    // in einem Lua-Call).
-    // ═══════════════════════════════════════════════════════════════
-
-    // Clip-Array für alle validen Cues aufbauen
-    const clipInfos  = [];
-    const placedCues = [];
-    for (let i = 0; i < cues.length; i++) {
-      const cue        = cues[i];
-      const startFrame = Math.round(cue.startSec * fps);
-      const dur        = Math.round((cue.endSec - cue.startSec) * fps);
-      if (dur <= 0) continue;
-      clipInfos.push({
-        mediaPoolItem: templateClip,
-        startFrame:    0,
-        endFrame:      dur,
-        trackIndex:    track,
-        recordFrame:   startFrame,
-      });
-      placedCues.push({ ...cue, startFrame });
-    }
-
     event.sender.send('pesto:applyProgress', { current: 1, total: 3 });
 
-    // Einmaliger Batch-Call — alle Clips auf einmal
-    if (clipInfos.length > 0) {
-      try {
-        const ok = await mp.AppendToTimeline(clipInfos);
-        if (!ok) {
-          errors.push('Batch-Platzierung fehlgeschlagen (AppendToTimeline returned false)');
-          placedCues.length = 0; // Phase 2 überspringen
-        }
-      } catch (err) {
-        errors.push(`AppendToTimeline-Fehler: ${err.message}`);
-        placedCues.length = 0;
-      }
-    }
+    // ═══════════════════════════════════════════════════════════════
+    // Platzierung + Text: pesto_apply.lua via fuscript
+    //
+    // Die vollständige Resolve Scripting API (in Lua via fuscript)
+    // interpretiert recordFrame korrekt für alle Clips im Batch.
+    // Die WI API AppendToTimeline hat dieses Problem NICHT in Lua,
+    // weil fuscript direkt gegen die native Resolve API kommuniziert.
+    //
+    // Ablauf in pesto_apply.lua:
+    //   1. Template-Clip im Media Pool suchen
+    //   2. mp:AppendToTimeline(alle Clips auf einmal)
+    //   3. Fusion-Node finden + Text statisch setzen
+    // ═══════════════════════════════════════════════════════════════
+
+    const { execFile } = require('child_process');
+    const { promisify } = require('util');
+    const execFileAsync = promisify(execFile);
+
+    // Valide Cues aufbauen
+    const placedCues = cues.filter(c =>
+      Math.round((c.endSec - c.startSec) * fps) > 0
+    );
+
+    // Daten als Lua-Tabelle schreiben
+    const ts          = Date.now();
+    const luaDataFile = path.join(os.tmpdir(), `pesto-apply-${ts}.lua`);
+    const luaDataLines = [
+      'return {',
+      `  trackIndex   = ${track},`,
+      `  fps          = ${fps},`,
+      `  templateName = ${JSON.stringify(templateClipName)},`,
+      '  cues = {',
+      ...placedCues.map(c =>
+        `    { startSec = ${c.startSec}, endSec = ${c.endSec}, text = ${JSON.stringify(c.text)} },`
+      ),
+      '  }',
+      '}',
+    ];
+    fs.writeFileSync(luaDataFile, luaDataLines.join('\n'), 'utf-8');
 
     event.sender.send('pesto:applyProgress', { current: 2, total: 3 });
 
+    let scriptResult = null;
 
-    // ═══════════════════════════════════════════════════════════════
-    // PHASE 2: Text via Lua (fuscript) oder Python setzen
-    // Die WI API hat keinen Zugriff auf Fusion-Node-Internals.
-    // fuscript ist Resolves eingebauter Lua-Interpreter — kein Python nötig.
-    // ═══════════════════════════════════════════════════════════════
-    if (placedCues.length > 0) {
-      const { execFile } = require('child_process');
-      const { promisify } = require('util');
-      const execFileAsync = promisify(execFile);
+    const fuscriptCandidates = [
+      '/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fuscript',
+      '/Applications/DaVinci Resolve Studio/DaVinci Resolve Studio.app/Contents/Libraries/Fusion/fuscript',
+    ];
 
-      event.sender.send('pesto:applyProgress', { current: cues.length * 2, total: cues.length * 2 });
+    // ── pesto_apply.lua: Placement + Text (vollständige API) ─────────
+    const applyLua = path.join(__dirname, 'pesto_apply.lua');
+    for (const fuscript of fuscriptCandidates) {
+      if (!fs.existsSync(fuscript)) continue;
+      try {
+        const { stdout } = await execFileAsync(fuscript, [applyLua, luaDataFile], { timeout: 120000 });
+        const lines = stdout.trim().split('\n');
+        for (let li = lines.length - 1; li >= 0; li--) {
+          try { scriptResult = JSON.parse(lines[li]); break; } catch {}
+        }
+        if (scriptResult) break;
+      } catch (e) {
+        console.warn('[Pesto] pesto_apply.lua fehlgeschlagen:', e.message);
+      }
+    }
 
-      let scriptResult = null;
-      const ts = Date.now();
+    // ── Fallback: WI API Placement + pesto_set_text.lua (Text only) ──
+    // Falls fuscript nicht verfügbar ist
+    if (!scriptResult) {
+      console.warn('[Pesto] Fallback auf WI API + pesto_set_text.lua');
+      try {
+        const clipInfos = placedCues.map(c => ({
+          mediaPoolItem: templateClip,
+          startFrame:    0,
+          endFrame:      Math.round((c.endSec - c.startSec) * fps),
+          trackIndex:    track,
+          recordFrame:   Math.round(c.startSec * fps),
+        }));
+        if (clipInfos.length > 0) await mp.AppendToTimeline(clipInfos);
+      } catch (e) {
+        errors.push(`WI API Placement: ${e.message}`);
+      }
 
-      // ── Variante 1: Lua via fuscript (kein Python, kein bmd.fromjson) ─
-      // Daten als Lua-Tabelle schreiben — robust, kein JSON-Parser nötig
-      const luaDataFile = path.join(os.tmpdir(), `pesto-cues-${ts}.lua`);
-      const luaDataLines = [
-        'return {',
-        `  trackIndex = ${track},`,
-        `  fps = ${fps},`,
-        '  cues = {',
-        ...placedCues.map(c => `    { startSec = ${c.startSec}, text = ${JSON.stringify(c.text)} },`),
-        '  }',
-        '}',
-      ];
-      fs.writeFileSync(luaDataFile, luaDataLines.join('\n'), 'utf-8');
-
-      const luaScript = path.join(__dirname, 'pesto_set_text.lua');
-      const fuscriptCandidates = [
-        '/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fuscript',
-        '/Applications/DaVinci Resolve Studio/DaVinci Resolve Studio.app/Contents/Libraries/Fusion/fuscript',
-      ];
-
+      const setTextLua = path.join(__dirname, 'pesto_set_text.lua');
       for (const fuscript of fuscriptCandidates) {
         if (!fs.existsSync(fuscript)) continue;
         try {
-          const { stdout } = await execFileAsync(fuscript, [luaScript, luaDataFile], { timeout: 60000 });
-          // Letztes JSON-Objekt aus stdout nehmen (fuscript kann Debug-Output vorher schreiben)
+          const { stdout } = await execFileAsync(fuscript, [setTextLua, luaDataFile], { timeout: 60000 });
           const lines = stdout.trim().split('\n');
           for (let li = lines.length - 1; li >= 0; li--) {
             try { scriptResult = JSON.parse(lines[li]); break; } catch {}
           }
           if (scriptResult) break;
-        } catch (e) {
-          console.warn('[Pesto] fuscript fehlgeschlagen:', e.message);
-        }
-      }
-      try { fs.unlinkSync(luaDataFile); } catch {}
-
-      // ── Variante 2: Python-Fallback (nutzt JSON) ──────────────────
-      if (!scriptResult) {
-        const tmpJson = path.join(os.tmpdir(), `pesto-cues-${ts}.json`);
-        fs.writeFileSync(tmpJson, JSON.stringify({
-          trackIndex: track, fps,
-          cues: placedCues.map(c => ({ startSec: c.startSec, text: c.text })),
-        }), 'utf-8');
-
-        const pyScript = path.join(__dirname, 'pesto_set_text.py');
-        for (const py of ['python3', 'python']) {
-          try {
-            const { stdout } = await execFileAsync(py, [pyScript, tmpJson], { timeout: 60000 });
-            const lines = stdout.trim().split('\n');
-            for (let li = lines.length - 1; li >= 0; li--) {
-              try { scriptResult = JSON.parse(lines[li]); break; } catch {}
-            }
-            if (scriptResult) break;
-          } catch {}
-        }
-        try { fs.unlinkSync(tmpJson); } catch {}
-      }
-
-      if (!scriptResult) {
-        errors.push('Text-Setzung fehlgeschlagen: weder fuscript noch Python verfügbar');
-      } else if (!scriptResult.ok) {
-        errors.push(`Text-Setzung: ${scriptResult.error}`);
-      } else if (scriptResult.errors?.length) {
-        errors.push(...scriptResult.errors.slice(0, 5));
+        } catch {}
       }
     }
+
+    try { fs.unlinkSync(luaDataFile); } catch {}
+
+    event.sender.send('pesto:applyProgress', { current: 3, total: 3 });
+
+    if (!scriptResult) {
+      errors.push('fuscript nicht gefunden. Bitte DaVinci Resolve korrekt installieren.');
+    } else if (!scriptResult.ok) {
+      errors.push(`Apply fehlgeschlagen: ${scriptResult.error}`);
+    } else if (scriptResult.errors?.length) {
+      errors.push(...scriptResult.errors.slice(0, 5));
+    }
+
 
     return { ok: true, errors, binCreated, clipPlacedInBin };
   } catch (e) {
