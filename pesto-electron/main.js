@@ -306,6 +306,63 @@ ipcMain.handle('pesto:deleteStyle', async (_e, styleId) => {
   }
 });
 
+// ── IPC: Video-Track-Anzahl lesen ─────────────────────────────────────
+ipcMain.handle('pesto:getTrackCount', async () => {
+  try {
+    const proj = await getCurrentProject();
+    if (!proj) return { ok: false, count: 0 };
+    let tl = null;
+    try { tl = await proj.GetCurrentTimeline(); } catch {}
+    if (!tl) return { ok: false, count: 0 };
+    let count = 0;
+    try { count = await tl.GetTrackCount('video'); } catch {}
+    return { ok: true, count };
+  } catch {
+    return { ok: false, count: 0 };
+  }
+});
+
+// ── IPC: Bestehende Subtitles importieren (ohne neu zu transkribieren) ──
+// Liest vorhandene Subtitle-Tracks aus der Timeline — preserviert manuell
+// korrigierte Texte und überschreibt NICHT durch CreateSubtitlesFromAudio.
+ipcMain.handle('pesto:importSubtitles', async (event) => {
+  try {
+    const proj = await getCurrentProject();
+    if (!proj) return { ok: false, error: 'Kein Projekt geöffnet' };
+    let tl = null;
+    try { tl = await proj.GetCurrentTimeline(); } catch {}
+    if (!tl) return { ok: false, error: 'Keine Timeline geöffnet' };
+
+    let fps = 24;
+    try { fps = parseFloat(await proj.GetSetting('timelineFrameRate')) || 24; } catch {}
+
+    let trackCount = 0;
+    try { trackCount = await tl.GetTrackCount('subtitle'); } catch {}
+    if (trackCount === 0) return { ok: false, error: 'Keine Subtitle-Tracks in der Timeline gefunden. Bitte erst transkribieren.' };
+
+    // Letzten Subtitle-Track lesen (enthält die längsten/besten Phrasen)
+    const phrases = [];
+    try {
+      const items = await tl.GetItemListInTrack('subtitle', trackCount);
+      for (const item of Object.values(items || {})) {
+        try {
+          const start = (await item.GetStart()) / fps;
+          const end   = (await item.GetEnd())   / fps;
+          const text  = await item.GetName();
+          if (text) phrases.push({ start, end, text });
+        } catch {}
+      }
+    } catch {}
+
+    if (!phrases.length) return { ok: false, error: 'Subtitle-Track ist leer.' };
+
+    event.sender.send('pesto:transcribeProgress', { percent: 100, message: 'Importiert!' });
+    return { ok: true, phrases };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 // ── IPC: Transkription ────────────────────────────────────────────────
 ipcMain.handle('pesto:transcribe', async (event, { engine, language, modelSize }) => {
   try {
@@ -677,19 +734,25 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
       const { promisify } = require('util');
       const execFileAsync = promisify(execFile);
 
-      // Cue-Daten als JSON in Temp-Datei schreiben
-      const tmpJson = path.join(os.tmpdir(), `pesto-cues-${Date.now()}.json`);
-      fs.writeFileSync(tmpJson, JSON.stringify({
-        trackIndex: track,
-        fps,
-        cues: placedCues.map(c => ({ startSec: c.startSec, text: c.text })),
-      }), 'utf-8');
-
       event.sender.send('pesto:applyProgress', { current: cues.length * 2, total: cues.length * 2 });
 
       let scriptResult = null;
+      const ts = Date.now();
 
-      // ── Variante 1: Lua via fuscript (kein Python nötig) ─────────
+      // ── Variante 1: Lua via fuscript (kein Python, kein bmd.fromjson) ─
+      // Daten als Lua-Tabelle schreiben — robust, kein JSON-Parser nötig
+      const luaDataFile = path.join(os.tmpdir(), `pesto-cues-${ts}.lua`);
+      const luaDataLines = [
+        'return {',
+        `  trackIndex = ${track},`,
+        `  fps = ${fps},`,
+        '  cues = {',
+        ...placedCues.map(c => `    { startSec = ${c.startSec}, text = ${JSON.stringify(c.text)} },`),
+        '  }',
+        '}',
+      ];
+      fs.writeFileSync(luaDataFile, luaDataLines.join('\n'), 'utf-8');
+
       const luaScript = path.join(__dirname, 'pesto_set_text.lua');
       const fuscriptCandidates = [
         '/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fuscript',
@@ -699,9 +762,9 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
       for (const fuscript of fuscriptCandidates) {
         if (!fs.existsSync(fuscript)) continue;
         try {
-          const { stdout } = await execFileAsync(fuscript, [luaScript, tmpJson], { timeout: 60000 });
+          const { stdout } = await execFileAsync(fuscript, [luaScript, luaDataFile], { timeout: 60000 });
+          // Letztes JSON-Objekt aus stdout nehmen (fuscript kann Debug-Output vorher schreiben)
           const lines = stdout.trim().split('\n');
-          // Letztes JSON-Objekt aus stdout nehmen (fuscript kann Debug-Output haben)
           for (let li = lines.length - 1; li >= 0; li--) {
             try { scriptResult = JSON.parse(lines[li]); break; } catch {}
           }
@@ -710,9 +773,16 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
           console.warn('[Pesto] fuscript fehlgeschlagen:', e.message);
         }
       }
+      try { fs.unlinkSync(luaDataFile); } catch {}
 
-      // ── Variante 2: Python-Fallback ───────────────────────────────
+      // ── Variante 2: Python-Fallback (nutzt JSON) ──────────────────
       if (!scriptResult) {
+        const tmpJson = path.join(os.tmpdir(), `pesto-cues-${ts}.json`);
+        fs.writeFileSync(tmpJson, JSON.stringify({
+          trackIndex: track, fps,
+          cues: placedCues.map(c => ({ startSec: c.startSec, text: c.text })),
+        }), 'utf-8');
+
         const pyScript = path.join(__dirname, 'pesto_set_text.py');
         for (const py of ['python3', 'python']) {
           try {
@@ -724,9 +794,8 @@ ipcMain.handle('pesto:apply', async (event, { cues, templateClipName, binName, t
             if (scriptResult) break;
           } catch {}
         }
+        try { fs.unlinkSync(tmpJson); } catch {}
       }
-
-      try { fs.unlinkSync(tmpJson); } catch {}
 
       if (!scriptResult) {
         errors.push('Text-Setzung fehlgeschlagen: weder fuscript noch Python verfügbar');

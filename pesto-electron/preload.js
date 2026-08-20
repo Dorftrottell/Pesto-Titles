@@ -56,4 +56,11 @@ contextBridge.exposeInMainWorld('pesto', {
 
   offApplyProgress: (cb) =>
     ipcRenderer.removeListener('pesto:applyProgress', cb),
+
+  // ── Timeline-Infos ───────────────────────────────────────────────────
+  getTrackCount: () =>
+    ipcRenderer.invoke('pesto:getTrackCount'),
+
+  importSubtitles: () =>
+    ipcRenderer.invoke('pesto:importSubtitles'),
 });

@@ -384,6 +384,10 @@ function renderCueList() {
 function makeEditable(spanEl, initVal, onSave, isText = false) {
   spanEl.addEventListener('click', () => {
     if (spanEl.querySelector('input,textarea')) return;
+    // Aktuelle Breite/Höhe fixieren vor dem Editieren → kein Layout-Shift
+    const rect = spanEl.getBoundingClientRect();
+    spanEl.style.minWidth  = rect.width  + 'px';
+    spanEl.style.minHeight = rect.height + 'px';
     spanEl.classList.add('editing');
     let inp;
     if (isText) {
@@ -401,6 +405,8 @@ function makeEditable(spanEl, initVal, onSave, isText = false) {
 
     const finish = () => {
       spanEl.classList.remove('editing');
+      spanEl.style.minWidth  = '';
+      spanEl.style.minHeight = '';
       onSave(inp.value.trim() || initVal);
     };
     inp.addEventListener('blur', finish);
@@ -838,8 +844,59 @@ async function init() {
     e.target.value = '';
   });
 
+  // Von Resolve lesen (bestehenden Subtitle-Track importieren)
+  $('import-resolve-btn')?.addEventListener('click', async () => {
+    $('import-resolve-btn').disabled = true;
+    $('progress-card').classList.remove('hidden');
+    $('progress-fill').style.width = '50%';
+    $('progress-label').textContent = 'Lese Subtitle-Track …';
+    try {
+      const result = await window.pesto.importSubtitles();
+      $('progress-card').classList.add('hidden');
+      if (result.ok) {
+        state.rawPhrases = result.phrases || [];
+        state.cues = segment(state.rawPhrases, collectConfig().segmentation);
+        renderCueList();
+        $('cue-card').classList.remove('hidden');
+        updateApplySummary();
+        showAlert('transcribe-alert', 'success',
+          `✓ ${state.cues.length} Cues aus bestehendem Resolve-Subtitle-Track geladen.`);
+      } else {
+        showAlert('transcribe-alert', 'error', result.error || 'Import fehlgeschlagen.');
+      }
+    } catch (e) {
+      $('progress-card').classList.add('hidden');
+      showAlert('transcribe-alert', 'error', e.message);
+    }
+    $('import-resolve-btn').disabled = false;
+  });
+
   // Track select → Summary aktualisieren
   $('track-select')?.addEventListener('change', updateApplySummary);
+
+  // Spur-Dropdown dynamisch befüllen
+  async function refreshTrackList() {
+    const sel = $('track-select');
+    if (!sel) return;
+    const prev = sel.value;
+    try {
+      const res = await window.pesto.getTrackCount();
+      const count = (res && res.ok) ? res.count : 0;
+      // Alle Optionen außer der ersten (Automatisch) entfernen
+      while (sel.options.length > 1) sel.remove(1);
+      for (let i = 1; i <= count; i++) {
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = `V${i}`;
+        sel.appendChild(opt);
+      }
+      // Vorherigen Wert wiederherstellen falls möglich
+      if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+    } catch {}
+  }
+  $('refresh-tracks-btn')?.addEventListener('click', refreshTrackList);
+  // Beim Start einmal laden
+  refreshTrackList();
 
   // Slider Live-Badges
   [['maxChars','maxChars-val'], ['maxWords','maxWords-val'], ['fillGaps','fillGaps-val']].forEach(

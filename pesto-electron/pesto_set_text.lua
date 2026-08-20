@@ -3,31 +3,35 @@
   Setzt Text in Fusion TextPlus-Nodes der platzierten Timeline-Items.
 
   Aufruf via fuscript:
-    fuscript pesto_set_text.lua /path/to/cues.json
+    fuscript pesto_set_text.lua /path/to/data.lua
 
-  JSON-Format: { "trackIndex": 3, "fps": 25.0,
-                 "cues": [{"startSec": 0.0, "text": "..."}, ...] }
+  data.lua-Format (Lua-Tabelle, kein JSON-Parser nötig):
+    return {
+      trackIndex = 3,
+      fps = 25.0,
+      cues = {
+        { startSec = 0.0, text = "Hallo Welt" },
+        ...
+      }
+    }
 ]]
 
--- ── JSON-Datei lesen ────────────────────────────────────────────────
-local json_path = arg and arg[1]
-if not json_path then
-  print('{"ok":false,"error":"Kein JSON-Pfad angegeben"}')
+-- ── Datei-Pfad aus Argumenten lesen ────────────────────────────────
+-- In fuscript: arg[0] = Script, arg[1] = erstes Argument
+local data_path = arg and arg[1]
+if not data_path then
+  -- Fallback: aus Umgebungsvariable (Windows-Kompatibilität)
+  data_path = os.getenv("PESTO_DATA_FILE")
+end
+if not data_path then
+  io.write('{"ok":false,"error":"Kein Datenpfad angegeben"}\n')
   os.exit(1)
 end
 
-local fh = io.open(json_path, 'r')
-if not fh then
-  print('{"ok":false,"error":"JSON-Datei nicht lesbar: ' .. json_path .. '"}')
-  os.exit(1)
-end
-local content = fh:read('*all')
-fh:close()
-
--- bmd.fromjson ist in Fusion/Resolve Lua verfügbar
-local ok_parse, data = pcall(bmd.fromjson, content)
-if not ok_parse or not data then
-  print('{"ok":false,"error":"JSON-Parse-Fehler"}')
+-- ── Daten als Lua-Tabelle laden (robust, kein bmd.fromjson nötig) ──
+local ok_load, data = pcall(dofile, data_path)
+if not ok_load or not data then
+  io.write('{"ok":false,"error":"Datei konnte nicht geladen werden: ' .. tostring(data) .. '"}\n')
   os.exit(1)
 end
 
@@ -36,28 +40,29 @@ local fps         = tonumber(data.fps) or 25.0
 local cues        = data.cues or {}
 
 -- ── Resolve verbinden ───────────────────────────────────────────────
-local resolve = bmd.scriptapp("Resolve")
+local resolve = bmd.scriptapp and bmd.scriptapp("Resolve")
 if not resolve then
-  print('{"ok":false,"error":"Resolve Scripting API nicht verfügbar"}')
+  io.write('{"ok":false,"error":"Resolve Scripting API nicht verfügbar (bmd.scriptapp)"}\n')
   os.exit(1)
 end
 
-local project = resolve:GetProjectManager():GetCurrentProject()
+local pm      = resolve:GetProjectManager()
+local project = pm and pm:GetCurrentProject()
 if not project then
-  print('{"ok":false,"error":"Kein Projekt geöffnet"}')
+  io.write('{"ok":false,"error":"Kein Projekt geöffnet"}\n')
   os.exit(1)
 end
 
 local timeline = project:GetCurrentTimeline()
 if not timeline then
-  print('{"ok":false,"error":"Keine Timeline geöffnet"}')
+  io.write('{"ok":false,"error":"Keine Timeline geöffnet"}\n')
   os.exit(1)
 end
 
--- GetItemListInTrack gibt eine Lua-Tabelle zurück { [1]=item, [2]=item, ... }
+-- GetItemListInTrack gibt {[1]=item, [2]=item, ...} zurück
 local items = timeline:GetItemListInTrack("video", track_index)
 if not items then
-  print('{"ok":false,"error":"Keine Items auf Track ' .. track_index .. '"}')
+  io.write('{"ok":false,"error":"Keine Items auf Track ' .. track_index .. '"}\n')
   os.exit(1)
 end
 
@@ -65,11 +70,20 @@ end
 local errors  = {}
 local matched = 0
 
+local function escJson(s)
+  s = tostring(s)
+  s = s:gsub('\\', '\\\\')
+  s = s:gsub('"', '\\"')
+  s = s:gsub('\n', '\\n')
+  s = s:gsub('\r', '\\r')
+  return s
+end
+
 for _, cue in ipairs(cues) do
   local start_frame = math.floor(cue.startSec * fps + 0.5)
   local text        = cue.text or ""
 
-  -- Item mit passendem Startframe suchen
+  -- Item mit passendem Startframe suchen (±2 Frames Toleranz)
   local found_item = nil
   for _, item in pairs(items) do
     if math.abs(item:GetStart() - start_frame) < 3 then
@@ -81,52 +95,48 @@ for _, cue in ipairs(cues) do
   if not found_item then
     table.insert(errors, "Kein Item @ frame " .. start_frame)
   else
-    local comp = found_item:GetFusionCompByIndex(1)
-    if not comp then
+    local ok_comp, comp = pcall(function() return found_item:GetFusionCompByIndex(1) end)
+    if not ok_comp or not comp then
       table.insert(errors, "Keine Fusion-Komp @ frame " .. start_frame)
     else
       -- 1. PestoText-Node direkt suchen
-      local node = comp:FindTool("PestoText")
+      local node = nil
+      pcall(function() node = comp:FindTool("PestoText") end)
 
       -- 2. Fallback: ersten TextPlus-Node nehmen
       if not node then
-        local tools = comp:GetToolList(false, "TextPlus")
-        if tools then
-          for _, t in pairs(tools) do
-            node = t
-            break
+        pcall(function()
+          local tools = comp:GetToolList(false, "TextPlus")
+          if tools then
+            for _, t in pairs(tools) do node = t; break end
           end
-        end
+        end)
       end
 
       if not node then
         table.insert(errors, "Kein TextPlus-Node @ frame " .. start_frame)
       else
-        -- Text setzen (StyledText → Text als Fallback)
-        local set_ok = pcall(function()
-          node:SetInput("StyledText", text)
-        end)
+        -- SetInput versuchen (StyledText → Text als Fallback)
+        local set_ok = false
+        pcall(function() node:SetInput("StyledText", text); set_ok = true end)
         if not set_ok then
-          local set_ok2 = pcall(function()
-            node:SetInput("Text", text)
-          end)
-          if not set_ok2 then
-            table.insert(errors, "SetInput fehlgeschlagen @ frame " .. start_frame)
-          else
-            matched = matched + 1
-          end
-        else
+          pcall(function() node:SetInput("Text", text); set_ok = true end)
+        end
+        if set_ok then
           matched = matched + 1
+        else
+          table.insert(errors, "SetInput fehlgeschlagen @ frame " .. start_frame)
         end
       end
     end
   end
 end
 
--- ── Ergebnis ausgeben ──────────────────────────────────────────────
-local result = {
-  ok      = true,
-  matched = matched,
-  errors  = errors,
-}
-print(bmd.tojson(result))
+-- ── Ergebnis als JSON ausgeben ─────────────────────────────────────
+local errs_json = '"errors":['
+for i, e in ipairs(errors) do
+  errs_json = errs_json .. (i > 1 and ',' or '') .. '"' .. escJson(e) .. '"'
+end
+errs_json = errs_json .. ']'
+
+io.write('{"ok":true,"matched":' .. matched .. ',' .. errs_json .. '}\n')

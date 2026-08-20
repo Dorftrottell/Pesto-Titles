@@ -90,6 +90,9 @@
           <button class="btn btn--primary btn--lg" id="transcribe-btn" style="flex:1;">
             Transkribieren
           </button>
+          <button class="btn btn--secondary btn--sm" id="import-resolve-btn" title="Bestehenden Subtitle-Track aus Resolve lesen (keine erneute Transkription)">
+            Von Resolve lesen
+          </button>
           <button class="btn btn--ghost btn--sm" id="import-srt-btn" title="SRT/VTT importieren">
             SRT importieren
           </button>
@@ -248,14 +251,12 @@
         </div>
         <div class="flex gap-sm items-center">
           <label style="color:var(--text2);font-weight:500;">Video-Spur</label>
-          <select id="track-select" style="width:220px;">
+          <select id="track-select" style="width:200px;">
             <option value="0">Automatisch (neue Spur anlegen)</option>
-            <option value="1">V1</option>
-            <option value="2">V2</option>
-            <option value="3">V3</option>
-            <option value="4">V4</option>
-            <option value="5">V5</option>
           </select>
+          <button class="btn btn--ghost btn--sm" id="refresh-tracks-btn" title="Spurliste aus Resolve aktualisieren" style="padding:4px 8px;">
+            <svg class="icon" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          </button>
         </div>
       </div>
 
